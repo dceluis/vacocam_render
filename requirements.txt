@@ -1,0 +1,5 @@
+ultralytics==8.0.124
+deepsparse-nightly[yolov8]
+ipykernel
+ipywidgets
+ipython
