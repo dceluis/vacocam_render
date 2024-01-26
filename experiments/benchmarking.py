@@ -1,27 +1,29 @@
-import concurrent.futures
 import numpy as np
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 from tqdm import tqdm
+import itertools
+import select
+import sys
+import multiprocessing
+import argparse
+import cv2
 
 from ultralytics import YOLO
 from sahi.models.yolov8 import Yolov8DetectionModel
 from sahi.predict import get_sliced_prediction
 
+from utils.sahi_batched import get_sliced_prediction as get_sliced_prediction_new
+from utils.sahi_batched import Yolov8BatchedDetectionModel
 
-from sahi_batched import get_sliced_prediction as get_sliced_prediction_new
-from sahi_batched import Yolov8BatchedDetectionModel
+file_path = Path(__file__).resolve().parent
+sys.path.append(str(file_path))
 
-import torch
+from render import ffmpeg_read_process, ffmpeg_read_frame
 
-import multiprocessing
-import subprocess
-import shutil
-import argparse
-
-import cv2
 from imutils.video import FileVideoStream
+from line_profiler import LineProfiler
 
 def run_one(video_path, model_path, max_frames=None, progress=False):
     model = YOLO(model=model_path)
@@ -74,11 +76,6 @@ def run_one(video_path, model_path, max_frames=None, progress=False):
 
     cap.stop()
 
-from render import start_ffmpeg_process_read, read_frame
-from line_profiler import LineProfiler
-import itertools
-import select
-
 def run_two(video_path, model_path, max_frames=None, progress=False):
     model = YOLO(model=model_path)
 
@@ -108,7 +105,7 @@ def run_two(video_path, model_path, max_frames=None, progress=False):
     if progress:
         pbar = tqdm(total=total_frame_num)
         
-    process = start_ffmpeg_process_read(video_path)
+    process = ffmpeg_read_process(video_path)
     
     images = []
 
@@ -116,7 +113,7 @@ def run_two(video_path, model_path, max_frames=None, progress=False):
     while current_frame_num < total_frame_num:
         end_of_stream = False
         # Read a frame from the video
-        frame = read_frame(process, original_width, original_height)
+        frame = ffmpeg_read_frame(process, original_width, original_height)
         current_frame_num += 1
 
         if frame is not None:

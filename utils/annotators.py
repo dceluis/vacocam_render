@@ -1,4 +1,4 @@
-from detections import Detections
+from core.detections import Detections
 import numpy as np
 import cv2
 

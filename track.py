@@ -7,7 +7,7 @@ from scipy.ndimage import convolve1d
 from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import UnivariateSpline
 
-from detections import Detections, load_video_detections, save_video_detections
+from core.detections import Detections, load_video_detections, save_video_detections
 
 from typing import List, Tuple
 
@@ -370,7 +370,7 @@ def find_max(heatmap):
 
     return max_coord, max_value
 
-from annotators import HeatMapAnnotator
+from utils.artifacts import HeatMapAnnotator
 
 def calc_pois_new(detections_list, canvas_height = 1440, canvas_width = 1920):
     decay_resolution = 1024
@@ -438,7 +438,7 @@ from typing import List, Tuple
 
 from gpt4 import submit_image as submit_image_to_gpt4
 
-from detections import Detections, load_video_detections, save_video_detections
+from core.detections import Detections, load_video_detections, save_video_detections
 
 def cluster_detections(detections_list: List[Detections], preset=None):
     X_Y = []

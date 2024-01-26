@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-# Taken from https://github.com/PyImageSearch/imutils/blob/master/imutils/video/count_frames.py
+# Taken from https://github.com/PyImageSearch/imutils/blob/master/imutils/video/filevideostream.py
 # copied bc imutils refused to install on my machine
 
 # import the necessary packages

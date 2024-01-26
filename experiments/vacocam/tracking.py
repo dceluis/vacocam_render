@@ -18,7 +18,7 @@ from PIL import Image
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from detections import Detections
+from core.detections import Detections
 
 class VideoSection:
     def __init__(self, video_info, start_frame, end_frame, detections, sample=None):

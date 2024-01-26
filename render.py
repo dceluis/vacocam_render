@@ -3,14 +3,15 @@ import os
 import subprocess
 import argparse
 import numpy as np
-from filevideostream import FileVideoStream
 from pathlib import Path
-
-from track import augment_detections, smoothen_pois, ignore_detections_from_mask
-from detections import load_video_detections
 
 import ffmpeg
 import wandb
+
+from core.detections import load_video_detections
+from utils.filevideostream import FileVideoStream
+
+from track import augment_detections, smoothen_pois, ignore_detections_from_mask
 
 def ffmpeg_copy_audio(video_source_path, audio_source_path, output_path, remove_source=False):
     video_input = ffmpeg.input(video_source_path)

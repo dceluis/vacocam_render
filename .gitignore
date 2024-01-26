@@ -1,22 +1,21 @@
+
+recipes/source/**
+source/**
+
+.track/**
+samples/**
+
 artifacts/**
 runs/**
 wandb/**
 
-source/**
-.track/**
-samples/**
-download.ipynb
-upload.ipynb
-upload.py
-
 .gradient/
+
 .ipynb_checkpoints/
+.vscode/
 __pycache__/
 venv/
 
-.vscode/
-
 .tool-versions
 
-client_secrets.json
 .envrc

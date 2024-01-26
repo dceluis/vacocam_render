@@ -4,16 +4,18 @@ import os
 import wandb
 
 from typing import Optional, Iterator, Tuple
-from sahi_batched import Yolov8BatchedDetectionModel
-from sahi_batched import get_sliced_prediction
-from filevideostream import FileVideoStream
+
+from utils.sahi_batched import Yolov8BatchedDetectionModel
+from utils.sahi_batched import get_sliced_prediction
+from utils.filevideostream import FileVideoStream
+
 from tqdm import tqdm
 from pathlib import Path
 
 from render import annotate_frame
-from detections import Detections, save_video_detections
+from core.detections import Detections, save_video_detections
 
-from artifacts import download_artifact
+from utils.artifacts import download_artifact
 
 def detect_video(video_path, model_path, max_frames=None):
     sahi_model = Yolov8BatchedDetectionModel(
@@ -165,7 +167,7 @@ if __name__ == '__main__':
     if os.path.exists(args.model):
         model_path = args.model
     else:
-        artifact, artifact_location = download_artifact("vacocam_model", args.model, run=run)
+        artifact, artifact_location = download_artifact(f"vacocam_model:{args.model}", run=run)
         model_path = Path(artifact_location) / "best.pt"
 
     for video_path in video_list:
