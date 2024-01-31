@@ -8,7 +8,7 @@ pip install -r requirements.txt
 ```
 
 ## Usage
-Rendering a supervised video is a 3 step process.
+Rendering a supervised video is a multi-step process.
 
 First, we detect the balls on each frame:
 ```
