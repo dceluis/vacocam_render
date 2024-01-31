@@ -1,5 +1,3 @@
-
-recipes/source/**
 source/**
 
 .track/**
@@ -15,7 +13,5 @@ wandb/**
 .vscode/
 __pycache__/
 venv/
-
-.tool-versions
 
 .envrc
