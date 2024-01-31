@@ -9,19 +9,23 @@ from scipy.interpolate import UnivariateSpline
 
 from core.detections import Detections, load_video_detections, save_video_detections
 
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 class IgnoreZone:
-    def __init__(self, pixels: set[tuple[int, int]], min_area: int | None, max_area: int | None):
+    def __init__(self, pixels: set[tuple[int, int]], min_area: Optional[int], max_area: Optional[int]):
         self.pixels = pixels
         self.min_area = min_area
         self.max_area = max_area
 
-    # this takes a single detection, not a Detections object
-    # (you obtain single detections from a Detections object by iterating over it)
-    def __contains__(self, detection: tuple[np.ndarray, np.ndarray | None, float | None, int | None, int | None]):
-        center = (int((detection[0][0] + detection[0][2]) / 2), int((detection[0][1] + detection[0][3]) / 2))
-        area = (detection[0][2] - detection[0][0]) * (detection[0][3] - detection[0][1])
+    # this takes a Detections object that has a single detection
+    def __contains__(self, detections: Detections):
+        if len(detections) > 1:
+            print("Warning: IgnoreZone.__contains__ called with a Detections object that has more than one detection.")
+
+        xyxy = detections.xyxy[0]
+
+        center = (int((xyxy[0] + xyxy[2]) / 2), int((xyxy[1] + xyxy[3]) / 2))
+        area = (xyxy[2] - xyxy[0]) * (xyxy[3] - xyxy[1])
 
         if self.min_area is not None and area < self.min_area:
             return False
@@ -216,8 +220,9 @@ def ignore_detections(detections_list: List[Detections], ignore_zone: IgnoreZone
         filtered = []
 
         for detection in frame_detections:
-            if detection not in ignore_zone:
-                filtered.append(Detections.from_single_tuple(detection))
+            single_detection = Detections.from_single_tuple(detection)
+            if single_detection not in ignore_zone:
+                filtered.append(single_detection)
             else:
                 ignored_count += 1
 
@@ -448,7 +453,7 @@ def cluster_detections(detections_list: List[Detections], preset=None):
     detections_lengths = [0] * len(detections_list)
 
     for idx, frame_detections in enumerate(detections_list):
-        for xyxy, _, conf, cls, _ in frame_detections:
+        for xyxy, _, conf, cls, *_ in frame_detections:
             det_xyxy = np.zeros((1, 4))
             det_xyxy[0] = xyxy
             det_conf = np.array([conf])
@@ -812,7 +817,7 @@ def track_video(video_path, detections, tracking="declustered"):
                 section_result = [Detections.empty()] * len(section_detections)
             else:
                 # primary_detections.append(clustered_detections[-1])
-                transposed = list(map(list, list(zip(*primary_detections, strict=True))))
+                transposed = list(map(list, list(zip(*primary_detections))))
 
                 section_result = [Detections.merge(data) for data in transposed]
 

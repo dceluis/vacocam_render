@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 import numpy as np
-from typing import Optional, Iterator, Tuple
+from typing import Optional, Tuple
 import os
 from pathlib import Path
 import supervision as sv
 
 from typing import List, Any
-from dataclasses import astuple
 
 class Detections(sv.Detections):
     point_of_interest: Optional[Tuple[int, int]] = None
@@ -18,9 +19,9 @@ class Detections(sv.Detections):
 
         dtype = [('bbox', float, (4,)), ('confidence', float), ('class', int)]
 
-        structured_array = np.zeros(len(self.confidence), dtype=dtype)
-        for i in range(len(self.confidence)):
-            structured_array[i] = (self.xyxy[i], self.confidence[i], self.class_id[i])
+        structured_array = np.zeros(len(self.xyxy), dtype=dtype)
+        for i in range(len(self.xyxy)):
+            structured_array[i] = (self.xyxy[i], self.confidence[i] if self.confidence is not None else 0, self.class_id[i] if self.class_id is not None else 0)
         return structured_array
     
     # from structured array, class method
@@ -80,81 +81,24 @@ class Detections(sv.Detections):
         return cls(bboxes, None, confidences, class_ids, None)
     
 
-    ## Redeclaring so that it returns our Detections class
     @classmethod
-    def merge(cls, detections_list: List["Detections"]) -> "Detections":
-        """
-        Merge a list of Detections objects into a single Detections object.
+    def merge(cls, detections_list: List[Detections]) -> Detections:
+        sv_detections: List[sv.Detections] = []
 
-        This method takes a list of Detections objects and combines their
-        respective fields (`xyxy`, `mask`, `confidence`, `class_id`, and `tracker_id`)
-        into a single Detections object. If all elements in a field are not
-        `None`, the corresponding field will be stacked.
-        Otherwise, the field will be set to `None`.
+        for detections in detections_list:
+            if isinstance(detections, Detections):
+                sv_detections.append(sv.Detections(detections.xyxy, detections.mask, detections.confidence, detections.class_id, detections.tracker_id))
+            else:
+                sv_detections.append(detections)
+        
+        merged_detections = sv.Detections.merge(sv_detections)
 
-        Args:
-            detections_list (List[Detections]): A list of Detections objects to merge.
-
-        Returns:
-            (Detections): A single Detections object containing
-                the merged data from the input list.
-
-        Example:
-            ```python
-            >>> from supervision import Detections
-
-            >>> detections_1 = Detections(...)
-            >>> detections_2 = Detections(...)
-
-            >>> merged_detections = Detections.merge([detections_1, detections_2])
-            ```
-        """
-        if len(detections_list) == 0:
-            return cls.empty()
-
-        detections_tuples_list = [astuple(detection) for detection in detections_list]
-        xyxy, mask, confidence, class_id, tracker_id = [
-            list(field) for field in zip(*detections_tuples_list)
-        ]
-
-        def __all_not_none(item_list: List[Any]):
-            return all(x is not None for x in item_list)
-
-        xyxy = np.vstack(xyxy)
-        mask = np.vstack(mask) if __all_not_none(mask) else None
-        confidence = np.hstack(confidence) if __all_not_none(confidence) else None
-        class_id = np.hstack(class_id) if __all_not_none(class_id) else None
-        tracker_id = np.hstack(tracker_id) if __all_not_none(tracker_id) else None
-
-        return cls(
-            xyxy=xyxy,
-            mask=mask,
-            confidence=confidence,
-            class_id=class_id,
-            tracker_id=tracker_id,
-        )
+        return cls(merged_detections.xyxy, merged_detections.mask, merged_detections.confidence, merged_detections.class_id, merged_detections.tracker_id)
 
     @classmethod
-    def empty(cls) -> "Detections":
-        """
-        Create an empty Detections object with no bounding boxes,
-            confidences, or class IDs.
-
-        Returns:
-            (Detections): An empty Detections object.
-
-        Example:
-            ```python
-            >>> from supervision import Detections
-
-            >>> empty_detections = Detections.empty()
-            ```
-        """
-        return cls(
-            xyxy=np.empty((0, 4), dtype=np.float32),
-            confidence=np.array([], dtype=np.float32),
-            class_id=np.array([], dtype=int),
-        )
+    def empty(cls) -> Detections:
+        super_empty = super().empty()
+        return cls(super_empty.xyxy, super_empty.mask, super_empty.confidence, super_empty.class_id, super_empty.tracker_id)
 
     def __copy__(self):
         return Detections(self.xyxy, self.mask, self.confidence, self.class_id, self.tracker_id)

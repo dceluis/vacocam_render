@@ -7,3 +7,6 @@ ipykernel
 ipywidgets
 ipython
 supervision
+scikit-learn
+scipy
+openai
