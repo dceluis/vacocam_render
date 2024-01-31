@@ -370,7 +370,7 @@ def find_max(heatmap):
 
     return max_coord, max_value
 
-from utils.artifacts import HeatMapAnnotator
+from utils.annotators import HeatMapAnnotator
 
 def calc_pois_new(detections_list, canvas_height = 1440, canvas_width = 1920):
     decay_resolution = 1024
@@ -436,8 +436,7 @@ import matplotlib.image as mpimg
 
 from typing import List, Tuple
 
-from gpt4 import submit_image as submit_image_to_gpt4
-
+from core.gpt4 import submit_image as submit_image_to_gpt4
 from core.detections import Detections, load_video_detections, save_video_detections
 
 def cluster_detections(detections_list: List[Detections], preset=None):

@@ -65,21 +65,19 @@ class Detections(sv.Detections):
 
     @classmethod
     def from_sahi_batched(cls, object_prediction_list):
-        bboxes = []
+        bboxes = np.zeros((len(object_prediction_list), 4)) 
         confidences = []
         class_ids = []
 
-        for _, result in enumerate(object_prediction_list):
-            mapped = list(map(int, result.bbox.to_xyxy()))
-            bboxes.append(mapped)
+        for idx, result in enumerate(object_prediction_list):
+            bboxes[idx] = result.bbox.to_xyxy()
             confidences.append(result.score.value)
             class_ids.append(result.category.id)
         
-        bboxes = np.array(bboxes)
         confidences = np.array(confidences)
         class_ids = np.array(class_ids)
 
-        return cls(bboxes, confidences, class_ids)
+        return cls(bboxes, None, confidences, class_ids, None)
     
 
     ## Redeclaring so that it returns our Detections class

@@ -9,6 +9,7 @@ import ffmpeg
 import wandb
 
 from core.detections import load_video_detections
+from utils.annotators import annotate_frame
 from utils.filevideostream import FileVideoStream
 
 from track import augment_detections, smoothen_pois, ignore_detections_from_mask
@@ -257,69 +258,6 @@ def render_video(
         os.remove(video_path)
 
     return (True, render_path)
-
-def annotate_frame(
-        frame,
-        poi=None,
-        poi_clamped=None,
-        poi_new=None,
-        detections=None,
-        xyxy=None,
-        stats=None,
-    ):
-
-    poi_color = (55, 100, 200)
-    poi_color_secondary = (poi_color[0] + 50, poi_color[1] + 50, poi_color[2])
-    poi_crosshair_thickness = 3
-    poi_crosshair_length = 15
-
-    label_font = cv2.FONT_HERSHEY_SIMPLEX
-
-    if poi:
-        # Draw real poi crosshair
-        cv2.line(frame, (poi[0] - 10, poi[1]), (poi[0] + 10, poi[1]), poi_color_secondary, 2)
-        cv2.line(frame, (poi[0], poi[1] - 10), (poi[0], poi[1] + 10), poi_color_secondary, 2)
-
-    # TODO remove Draw new poi crosshair
-    if poi_new:
-        poi_color_new = (200, 200, 205)
-        cv2.line(frame, (poi_new[0] - 10, poi_new[1]), (poi_new[0] + 10, poi_new[1]), poi_color_new, 2)
-        cv2.line(frame, (poi_new[0], poi_new[1] - 10), (poi_new[0], poi_new[1] + 10), poi_color_new, 2)
-
-    if poi_clamped:
-        # Draw clamped poi crosshair
-        cv2.line(frame, (poi_clamped[0] - poi_crosshair_length, poi_clamped[1]), (poi_clamped[0] + poi_crosshair_length, poi_clamped[1]), poi_color, poi_crosshair_thickness)
-        cv2.line(frame, (poi_clamped[0], poi_clamped[1] - poi_crosshair_length), (poi_clamped[0], poi_clamped[1] + poi_crosshair_length), poi_color, poi_crosshair_thickness)
-
-    if stats:
-        # Draw stats
-        for idx, stat in enumerate(stats):
-            cv2.putText(frame, f"{stat}", (4, 20 + (idx * 20)), label_font, 0.6, poi_color, 2)
-
-    if xyxy:
-        tlx, tly, brx, bry = xyxy
-        # Draw frame box
-        cv2.rectangle(frame, (tlx, tly), (brx, bry), poi_color, 2)
-
-    if detections:
-        for bbox, _, conf, *_ in detections:
-            x1, y1, x2, y2 = map(lambda x: int(x), bbox)
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), poi_color, 2, cv2.LINE_AA)
-
-            label_text = f'{conf:.3f}'
-            label_color = poi_color
-            label_txt_color=(255, 255, 255)
-            label_font_scale = 0.5
-            label_thickness = 1
-
-            label_w, label_h = cv2.getTextSize(label_text, label_font, fontScale=label_font_scale, thickness=label_thickness)[0]
-
-            label_offset = label_h + 3
-            outside = y1 >= label_offset
-
-            cv2.rectangle(frame, (x1, y1), (x1 + label_w, y1 - label_offset if outside else y1 + label_offset), label_color, -1, cv2.LINE_AA)
-            cv2.putText(frame, label_text, (x1, y1 - 2 if outside else y1 + label_h + 2), label_font, label_font_scale, label_txt_color, label_thickness, cv2.LINE_AA)
 
 def augment_joint_detections(video_list_detections):
     def _split_list(elements, lengths):

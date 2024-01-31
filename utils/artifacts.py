@@ -2,11 +2,11 @@ import os
 import wandb
 
 WANDB_NAMESPACE = os.environ.get("WANDB_NAMESPACE")
-ARTIFACT_DIR = os.environ.get("ARTIFACT_DIR") or os.path.join(os.getcwd(), "artifacts")
-
-api = wandb.Api()
+ARTIFACT_DIR = os.environ.get("ARTIFACT_DIR")
 
 def download_artifact(name, run=None):
+    api = wandb.Api()
+
     if not WANDB_NAMESPACE:
         raise ValueError("WANDB_NAMESPACE not set")
 

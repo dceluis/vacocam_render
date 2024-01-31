@@ -1,7 +1,7 @@
-import cv2
-import argparse
 import os
+import argparse
 import wandb
+import cv2
 
 from typing import Optional, Iterator, Tuple
 
@@ -12,9 +12,9 @@ from utils.filevideostream import FileVideoStream
 from tqdm import tqdm
 from pathlib import Path
 
-from render import annotate_frame
 from core.detections import Detections, save_video_detections
 
+from utils.annotators import annotate_frame
 from utils.artifacts import download_artifact
 
 def detect_video(video_path, model_path, max_frames=None):

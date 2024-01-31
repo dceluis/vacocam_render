@@ -1,5 +1,9 @@
 ultralytics==8.0.124
-deepsparse-nightly[yolov8]
+opencv-python
+sahi
+wandb
+ffmpeg-python
 ipykernel
 ipywidgets
 ipython
+supervision
