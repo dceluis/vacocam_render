@@ -9,6 +9,10 @@ import supervision as sv
 from typing import List, Any
 
 class Detections(sv.Detections):
+    """
+    Detections class, a subclass of supervision.Detections, with additional methods for IO, merging and presentation.
+    """
+
     point_of_interest: Optional[Tuple[int, int]] = None
     area_of_interest: Optional[int] = None
 
@@ -63,7 +67,6 @@ class Detections(sv.Detections):
 
         return cls(bboxes, mask, confidences, classes, tracker_ids)
 
-
     @classmethod
     def from_sahi_batched(cls, object_prediction_list):
         bboxes = np.zeros((len(object_prediction_list), 4)) 
@@ -83,17 +86,11 @@ class Detections(sv.Detections):
 
     @classmethod
     def merge(cls, detections_list: List[Detections]) -> Detections:
-        sv_detections: List[sv.Detections] = []
-
-        for detections in detections_list:
-            if isinstance(detections, Detections):
-                sv_detections.append(sv.Detections(detections.xyxy, detections.mask, detections.confidence, detections.class_id, detections.tracker_id))
-            else:
-                sv_detections.append(detections)
+        sv_detections = [sv.Detections(dets.xyxy, dets.mask, dets.confidence, dets.class_id, dets.tracker_id) for dets in detections_list]
         
-        merged_detections = sv.Detections.merge(sv_detections)
+        merged = sv.Detections.merge(sv_detections)
 
-        return cls(merged_detections.xyxy, merged_detections.mask, merged_detections.confidence, merged_detections.class_id, merged_detections.tracker_id)
+        return cls(merged.xyxy, merged.mask, merged.confidence, merged.class_id, merged.tracker_id)
 
     @classmethod
     def empty(cls) -> Detections:
