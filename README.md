@@ -7,6 +7,17 @@ cd vacocam_render
 pip install -r requirements.txt
 ```
 
+## Setup
+A valid OpenAI API key is needed, if you want to use the AI supervision.
+```
+cp .env.sample .env
+```
+
+Then, add your key to .env
+```.env
+OPENAI_API_KEY="your_api_key"
+```
+
 ## Usage
 Rendering a supervised video is a multi-step process.
 
