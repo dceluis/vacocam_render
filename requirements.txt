@@ -1,4 +1,4 @@
-ultralytics==8.0.124
+ultralytics==8.0.186
 opencv-python
 sahi
 wandb
