@@ -787,7 +787,7 @@ def track_video(video_path, detections, tracking="declustered"):
                     if loaded_response is not None:
                         gpt4_response = loaded_response
                     else:
-                        raise Exception("Error loading GPT-4 response")
+                        # raise Exception("Error loading GPT-4 response")
                         gpt4_response = ask_gippity_for_primary_clusters(section_img, section_metadata)
                     
                         if gpt4_response is None:
