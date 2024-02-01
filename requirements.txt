@@ -10,3 +10,4 @@ supervision
 scikit-learn
 scipy
 openai
+python-dotenv
