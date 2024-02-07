@@ -11,8 +11,6 @@ from core.detections import Detections, load_video_detections, save_video_detect
 
 from typing import List, Tuple, Optional
 
-from dataclasses import dataclass
-
 class IgnoreZone:
     def __init__(self, pixels: set[tuple[int, int]], min_area: Optional[int], max_area: Optional[int]):
         self.pixels = pixels
@@ -433,6 +431,7 @@ import io
 import argparse
 import base64
 import json
+import random
 from PIL import Image
 from io import BytesIO
 
@@ -442,6 +441,7 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 
 from typing import List, Tuple
+from dataclasses import dataclass
 
 from core.gpt4 import submit_image as submit_image_to_gpt4
 from core.detections import Detections, load_video_detections, save_video_detections
@@ -702,7 +702,8 @@ def track_video(video_path, detections: List[Detections], tracking="declustered"
                         overlapping_clusters_key_pairs = [(oc.clusters.keys(), (key1, key2)) for oc in overlapping_clusters]
 
                         if (key1, key2) in overlapping_clusters_key_pairs or (key2, key1) in overlapping_clusters_key_pairs:
-                            continue
+                            pass
+                            # continue
                         if overlap < min(end1 - start1, end2 - start2) * 0.5:
                             continue
                         if end1 - start1 < 15 or end2 - start2 < 15 or overlap < 15:
@@ -872,15 +873,25 @@ def track_video(video_path, detections: List[Detections], tracking="declustered"
 
     return detections_path
 
+@dataclass
+class Color:
+    name: str
+    hex: str
+    rgb: list[int]
+    cmyk: list[int]
+    hsb: list[int]
+    hsl: list[int]
+    lab: list[int]
+
 colors = [
-    {"name":"Blue","hex":"0015ff","rgb":[0,21,255],"cmyk":[100,92,0,0],"hsb":[235,100,100],"hsl":[235,100,50],"lab":[33,76,-106]},
-    {"name":"Pumpkin","hex":"ff7300","rgb":[255,115,0],"cmyk":[0,55,100,0],"hsb":[27,100,100],"hsl":[27,100,50],"lab":[65,49,73]},
-    {"name":"Chartreuse","hex":"90fe00","rgb":[144,254,0],"cmyk":[43,0,100,0],"hsb":[86,100,100],"hsl":[86,100,50],"lab":[90,-63,86]},
-    {"name":"Violet","hex":"8400ff","rgb":[132,0,255],"cmyk":[48,100,0,0],"hsb":[271,100,100],"hsl":[271,100,50],"lab":[41,83,-92]},
-    {"name":"Red","hex":"ff0a12","rgb":[255,10,18],"cmyk":[0,96,93,0],"hsb":[358,96,100],"hsl":[358,100,52],"lab":[54,80,63]},
-    {"name":"Yellow","hex":"fffb00","rgb":[255,251,0],"cmyk":[0,2,100,0],"hsb":[59,100,100],"hsl":[59,100,50],"lab":[96,-20,94]},
-    {"name":"Fluorescent cyan","hex":"00fff7","rgb":[0,255,247],"cmyk":[100,0,3,0],"hsb":[178,100,100],"hsl":[178,100,50],"lab":[91,-50,-10]},
-    {"name":"Persian rose","hex":"ff00a1","rgb":[255,0,161],"cmyk":[0,100,37,0],"hsb":[322,100,100],"hsl":[322,100,50],"lab":[56,87,-14]},
+    Color(name="Blue", hex="0015ff", rgb=[0,21,255], cmyk=[100,92,0,0], hsb=[235,100,100], hsl=[235,100,50], lab=[33,76,-106]),
+    Color(name="Pumpkin", hex="ff7300", rgb=[255,115,0], cmyk=[0,55,100,0], hsb=[27,100,100], hsl=[27,100,50], lab=[65,49,73]),
+    Color(name="Chartreuse", hex="90fe00", rgb=[144,254,0], cmyk=[43,0,100,0], hsb=[86,100,100], hsl=[86,100,50], lab=[90,-63,86]),
+    Color(name="Violet", hex="8400ff", rgb=[132,0,255], cmyk=[48,100,0,0], hsb=[271,100,100], hsl=[271,100,50], lab=[41,83,-92]),
+    Color(name="Red", hex="ff0a12", rgb=[255,10,18], cmyk=[0,96,93,0], hsb=[358,96,100], hsl=[358,100,52], lab=[54,80,63]),
+    Color(name="Yellow", hex="fffb00", rgb=[255,251,0], cmyk=[0,2,100,0], hsb=[59,100,100], hsl=[59,100,50], lab=[96,-20,94]),
+    Color(name="Cyan", hex="00fff7", rgb=[0,255,247], cmyk=[100,0,3,0], hsb=[178,100,100], hsl=[178,100,50], lab=[91,-50,-10]),
+    Color(name="Rose", hex="ff00a1", rgb=[255,0,161], cmyk=[0,100,37,0], hsb=[322,100,100], hsl=[322,100,50], lab=[56,87,-14]),
 ]
 
 def encode_image(image_bytes):
@@ -1073,10 +1084,11 @@ def find_place_for_box(cluster: list[Detections], box_height, box_width, image_h
     # if no box position was found, return the centroid
     return (int(centroid_x), int(centroid_y))
 
-metadata_type = List[Tuple[str, float, float, float, int, int, int, dict]]
+metadata_type = List[Tuple[str, float, float, float, int, int, int, Color]]
 
 def present_section(bg_image, clustered_detections: dict[int, list[Detections]], ignore_noise=True):
     metadata: metadata_type = []
+    picked_colors = []
 
     if bg_image is None:
         bg_image = np.zeros((1080, 1920, 3), dtype=np.uint8)
@@ -1102,7 +1114,9 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
         median_size = cluster_mean[2]
         cluster_size = len(cluster_data)
 
-        color = colors[idx % len(colors)]
+        # pick a random color not in the picked_colors
+        color = random.choice([c for c in colors if c.name not in picked_colors])
+        picked_colors.append(color.name)
 
         cluster_start_frame = 0
         cluster_end_frame = len(cluster) - 1
@@ -1132,7 +1146,7 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
             tlx, tly = int(x - radius - padding), int(y - radius - padding)
             brx, bry = int(x + radius + padding), int(y + radius + padding)
 
-            cv2.rectangle(bg_image, (tlx, tly), (brx, bry), color["rgb"][::-1], 2)
+            cv2.rectangle(bg_image, (tlx, tly), (brx, bry), color.rgb[::-1], 2)
 
         frame_centers = []
 
@@ -1191,8 +1205,8 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
         text_size, _ = cv2.getTextSize(text_content, text_font, text_font_scale, text_font_thickness)
         box_size = (text_size[0] + box_padding * 2, text_size[1] + box_padding * 2)
         
-        box_color = (255, 255, 255)
-        text_color = color["rgb"][::-1]
+        box_color = (0,0,0)
+        text_color = color.rgb[::-1]
 
         box_tlx, box_tly = find_place_for_box(cluster, box_size[1], box_size[0], image_height, image_width)
         box_brx, box_bry = box_tlx + box_size[0], box_tly + box_size[1]
@@ -1284,7 +1298,7 @@ def present_metadata(metadata: metadata_type):
     headers = "id, color"
 
     for box_label, _, _, _, _, _, _, color in metadata:
-        presented_metadata.append(f"{box_label}, {color['name']}")
+        presented_metadata.append(f"{box_label}, {color.name}")
 
     presented_metadata = "\n".join(presented_metadata)
     presented_metadata = f"{headers}\n{presented_metadata}"
