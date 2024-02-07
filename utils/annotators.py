@@ -4,6 +4,8 @@ import cv2
 from tqdm import tqdm
 from core.detections import load_detections, Detections
 
+from typing import Optional
+
 def gaussian(x, mu, sigma):
     return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sigma, 2.)))
 
@@ -159,7 +161,7 @@ def annotate_frame(
         poi=None,
         poi_clamped=None,
         poi_new=None,
-        detections=None,
+        detections: Optional[Detections] = None,
         xyxy=None,
         stats=None,
     ):
@@ -198,12 +200,16 @@ def annotate_frame(
         cv2.rectangle(frame, (tlx, tly), (brx, bry), poi_color, 2)
 
     if detections:
-        for bbox, _, conf, *_ in detections:
+        for single_detection in detections.to_split_list():
+            bbox = single_detection.xyxy[0]
+            conf = single_detection.confidence[0] if single_detection.confidence is not None else 0
+            cluster = single_detection.cluster_id[0] if single_detection.cluster_id is not None else -1
+
             x1, y1, x2, y2 = map(lambda x: int(x), bbox)
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), poi_color, 2, cv2.LINE_AA)
 
-            label_text = f'{conf:.3f}'
+            label_text = f'{conf:.3f} [{chr(65 + cluster)}]'
             label_color = poi_color
             label_txt_color=(255, 255, 255)
             label_font_scale = 0.5

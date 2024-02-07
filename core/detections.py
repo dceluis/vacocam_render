@@ -4,28 +4,59 @@ import numpy as np
 from typing import Optional, Tuple
 import os
 from pathlib import Path
+from dataclasses import dataclass
 import supervision as sv
 
 from typing import List, Any
 
+@dataclass
 class Detections(sv.Detections):
     """
     Detections class, a subclass of supervision.Detections, with additional methods for IO, merging and presentation.
     """
 
+    cluster_id: np.ndarray = np.array([], dtype=int)
     point_of_interest: Optional[Tuple[int, int]] = None
     area_of_interest: Optional[int] = None
+    
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.cluster_id.size == 0 and self.xyxy.size > 0:
+            # an aray of -1s for len(self.xyxy)
+            self.cluster_id = np.full(len(self.xyxy), -1, dtype=int)
+
+    def to_split_list(self) -> List[Detections]:
+        detections_list = [
+            Detections(
+                xyxy=self.xyxy[i].reshape(1, 4),
+                mask=self.mask[i] if self.mask is not None else None,
+                confidence=self.confidence[i].reshape(1) if self.confidence is not None else None,
+                class_id=self.class_id[i].reshape(1) if self.class_id is not None else None,
+                tracker_id=self.tracker_id[i].reshape(1) if self.tracker_id is not None else None,
+                cluster_id=self.cluster_id[i].reshape(1),
+                point_of_interest=self.point_of_interest if self.point_of_interest else None,
+                area_of_interest=self.area_of_interest if self.area_of_interest else None
+            ) for i in range(len(self.xyxy))
+        ]
+
+        return detections_list
 
     def to_structured_array(self):
         """
         Converts the Detections object to a numpy structured array of shape `(N, 3)`.
         """
 
-        dtype = [('bbox', float, (4,)), ('confidence', float), ('class', int)]
+        dtype = [('bbox', float, (4,)), ('confidence', float), ('class', int), ('cluster', int)]
 
         structured_array = np.zeros(len(self.xyxy), dtype=dtype)
         for i in range(len(self.xyxy)):
-            structured_array[i] = (self.xyxy[i], self.confidence[i] if self.confidence is not None else 0, self.class_id[i] if self.class_id is not None else 0)
+            xyxy_r = self.xyxy[i]
+            confidence_r = self.confidence[i] if self.confidence is not None else 0
+            class_id_r = self.class_id[i] if self.class_id is not None else 0
+            cluster_r = self.cluster_id[i]
+
+            structured_array[i] = (xyxy_r, confidence_r, class_id_r, cluster_r)
         return structured_array
     
     # from structured array, class method
@@ -34,39 +65,22 @@ class Detections(sv.Detections):
         bboxes = np.zeros((len(structured_array["bbox"]), 4))
         confidences = []
         classes = []
+        clusters = []
+        
         for i in range(len(structured_array)):
             bboxes[i] = structured_array["bbox"][i]
             confidences.append(structured_array["confidence"][i])
             classes.append(structured_array["class"][i])
+            
+            if "cluster" in structured_array.dtype.names:
+                clusters.append(structured_array["cluster"][i])
 
-        bboxes = np.array(bboxes)
         confidences = np.array(confidences)
         classes = np.array(classes)
+        clusters = np.array(clusters)
 
-        return cls(bboxes, None, confidences, classes)
+        return cls(bboxes, None, confidences, classes, cluster_id=clusters)
     
-    @classmethod
-    def from_single_tuple(cls, tuple):
-        # do not use from_structured_array, as it will not work with a single tuple
-        bboxes = np.zeros((1, 4))
-        mask = None
-        confidences = []
-        classes = []
-        tracker_ids = []
-
-        bboxes[0] = tuple[0]
-        mask = tuple[1]
-        confidences.append(tuple[2])
-        classes.append(tuple[3])
-        tracker_ids.append(tuple[4])
-
-        bboxes = np.array(bboxes)
-        confidences = np.array(confidences)
-        classes = np.array(classes)
-        tracker_ids = np.array(tracker_ids)
-
-        return cls(bboxes, mask, confidences, classes, tracker_ids)
-
     @classmethod
     def from_sahi_batched(cls, object_prediction_list):
         bboxes = np.zeros((len(object_prediction_list), 4)) 
@@ -81,24 +95,36 @@ class Detections(sv.Detections):
         confidences = np.array(confidences)
         class_ids = np.array(class_ids)
 
-        return cls(bboxes, None, confidences, class_ids, None)
+        return cls(
+            xyxy=bboxes,
+            confidence=confidences,
+            class_id=class_ids
+        )
     
-
     @classmethod
     def merge(cls, detections_list: List[Detections]) -> Detections:
-        sv_detections = [sv.Detections(dets.xyxy, dets.mask, dets.confidence, dets.class_id, dets.tracker_id) for dets in detections_list]
-        
-        merged = sv.Detections.merge(sv_detections)
+        if len(detections_list) == 0:
+            return cls.empty()
 
-        return cls(merged.xyxy, merged.mask, merged.confidence, merged.class_id, merged.tracker_id)
+        attributes = sv.Detections.__annotations__.keys()
+        sv_detections = [sv.Detections(**{attr: getattr(dets, attr) for attr in attributes}) for dets in detections_list]
+        sv_merged = sv.Detections.merge(sv_detections)
+        sv_attributes = {attr: getattr(sv_merged, attr) for attr in attributes}
+
+        sv_attributes["cluster_id"] = np.hstack([dets.cluster_id for dets in detections_list])
+        
+        ## point of interest and area of interest are reset to None
+
+        return cls(**sv_attributes)
 
     @classmethod
     def empty(cls) -> Detections:
-        super_empty = super().empty()
-        return cls(super_empty.xyxy, super_empty.mask, super_empty.confidence, super_empty.class_id, super_empty.tracker_id)
-
+        sv_empty = sv.Detections.empty().__dict__
+        sv_empty["cluster_id"] = np.array([], dtype=int)
+        return cls(**sv_empty)
+    
     def __copy__(self):
-        return Detections(self.xyxy, self.mask, self.confidence, self.class_id, self.tracker_id)
+        return Detections(self.xyxy, self.mask, self.confidence, self.class_id, self.tracker_id, cluster_id=self.cluster_id, point_of_interest=self.point_of_interest, area_of_interest=self.area_of_interest)
     
 #################
 # Detections IO #

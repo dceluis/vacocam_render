@@ -11,6 +11,8 @@ from core.detections import Detections, load_video_detections, save_video_detect
 
 from typing import List, Tuple, Optional
 
+from dataclasses import dataclass
+
 class IgnoreZone:
     def __init__(self, pixels: set[tuple[int, int]], min_area: Optional[int], max_area: Optional[int]):
         self.pixels = pixels
@@ -219,17 +221,17 @@ def ignore_detections(detections_list: List[Detections], ignore_zone: IgnoreZone
     for frame_detections in detections_list:
         filtered = []
 
-        for detection in frame_detections:
-            single_detection = Detections.from_single_tuple(detection)
-            if single_detection not in ignore_zone:
-                filtered.append(single_detection)
+        split_detections = frame_detections.to_split_list()
+        for single_detections in split_detections:
+            if single_detections not in ignore_zone:
+                filtered.append(single_detections)
             else:
                 ignored_count += 1
 
         valid_detections.append(Detections.merge(filtered))
     
     if ignored_count > 0:
-        print(f"Ignored {ignored_count} detections")
+        print(f"[IgnoreZone] Ignored {ignored_count} detections")
 
     return valid_detections
 
@@ -520,22 +522,24 @@ def cluster_detections(detections_list: List[Detections], preset=None):
         clusters = X_clusters[processed_detections_idx:processed_detections_idx + length]
         data = DATA_FLAT[processed_detections_idx:processed_detections_idx + length]
         
-        temp_clustered_detections = {cluster_id: [] for cluster_id in unique_labels}
+        clustered_detections_for_frame: dict[int, list[Detections]] = {cluster_id: [] for cluster_id in unique_labels}
 
         for idx in range(length):
             cluster_id = clusters[idx]
             detection = data[idx]
-            temp_clustered_detections[cluster_id].append(detection)
+
+            detection.cluster_id = np.array([cluster_id])
+
+            clustered_detections_for_frame[cluster_id].append(detection)
         
-        for cluster_id, cluster_detections in temp_clustered_detections.items():
-            frame_detections = Detections.merge(cluster_detections)
-            clustered_detections[cluster_id][frame_index] = frame_detections
+        for cluster_id, cluster_detections_list in clustered_detections_for_frame.items():
+            clustered_detections[cluster_id][frame_index] = Detections.merge(cluster_detections_list)
 
         processed_detections_idx += length
 
     return clustered_detections
 
-def track_video(video_path, detections, tracking="declustered"):
+def track_video(video_path, detections: List[Detections], tracking="declustered"):
     if tracking == "declustered":
         clustered_detections = cluster_detections(detections, preset="static")
 
@@ -648,20 +652,26 @@ def track_video(video_path, detections, tracking="declustered"):
 
                 return IgnoreZone(pixels, min_area, max_area)
 
-        
-        video_sections = {}
+        @dataclass
+        class OverlappingCluster:
+            overlap: int
+            clusters: dict[int, List[Detections]]
+            bounds: dict[int, Tuple[int, int]]
+
+        @dataclass
+        class VideoSection:
+            detections: List[Detections]
+            clustered_detections: dict[int, List[Detections]]
+            clustered_detections_minus_noise: dict[int, List[Detections]]
+            overlapping_clusters: List[OverlappingCluster]
+
+        video_sections: dict[Tuple[int, int], VideoSection] = {}
         overlaps_count = 0
 
         for start, end in frame_indices:
-            video_section = {}
-
             section_detections = detections[start:end]
-            clustered_detections: dict[int, list[Detections]] = cluster_detections(section_detections, preset="play")
-            clustered_detections_minus_noise: dict[int, list[Detections]] = { key: detections for key, detections in clustered_detections.items() if key != -1 }
-            
-            video_section["detections"] = section_detections
-            video_section["clustered_detections"] = clustered_detections
-            video_section["clustered_detections_minus_noise"] = clustered_detections_minus_noise
+            clustered_detections = cluster_detections(section_detections, preset="play")
+            clustered_detections_minus_noise = { key: detections for key, detections in clustered_detections.items() if key != -1 }
 
             # find clusters start and ends
             start_ends: dict[int, tuple[int, int]] = { key: (0, 0) for key in clustered_detections_minus_noise.keys() }
@@ -682,14 +692,16 @@ def track_video(video_path, detections, tracking="declustered"):
                 start_ends[key] = (cluster_start, cluster_end)
             
             # now find any overlapping clusters
-            overlapping_clusters = {}
+            overlapping_clusters: List[OverlappingCluster] = []
 
             for key1, (start1, end1) in start_ends.items():
                 for key2, (start2, end2) in start_ends.items():
                     if key1 != key2 and start1 < end2 and end1 > start2:
                         overlap = min(end1, end2) - max(start1, start2)
 
-                        if (key1, key2) in overlapping_clusters or (key2, key1) in overlapping_clusters:
+                        overlapping_clusters_key_pairs = [(oc.clusters.keys(), (key1, key2)) for oc in overlapping_clusters]
+
+                        if (key1, key2) in overlapping_clusters_key_pairs or (key2, key1) in overlapping_clusters_key_pairs:
                             continue
                         if overlap < min(end1 - start1, end2 - start2) * 0.5:
                             continue
@@ -698,19 +710,26 @@ def track_video(video_path, detections, tracking="declustered"):
 
                         overlaps_count += 1
 
-                        overlapping_clusters[(key1, key2)] = {
-                            "overlap": min(end1, end2) - max(start1, start2),
-                            "clusters": {
+                        overlapping_cluster = OverlappingCluster(
+                            overlap=overlap,
+                            clusters={
                                 key1: clustered_detections_minus_noise[key1],
                                 key2: clustered_detections_minus_noise[key2]
                             },
-                            "bounds": {
+                            bounds={
                                 key1: (start + start1, start + end1),
                                 key2: (start + start2, start + end2)
-                            },
-                        }
+                            }
+                        )
 
-            video_section["overlapping_clusters"] = overlapping_clusters
+                        overlapping_clusters.append(overlapping_cluster)
+            
+            video_section = VideoSection(
+                detections=section_detections,
+                clustered_detections=clustered_detections,
+                clustered_detections_minus_noise=clustered_detections_minus_noise,
+                overlapping_clusters=overlapping_clusters
+            )
 
             video_sections[(start, end)] = video_section
 
@@ -723,34 +742,37 @@ def track_video(video_path, detections, tracking="declustered"):
         v_out = cv2.VideoWriter("overlaps.mp4", cv2.VideoWriter_fourcc(*'mp4v'), framerate, (1920, 1080))
 
         for (section_start, section_end), section_data in video_sections.items():
-            overlapping_clusters = section_data["overlapping_clusters"]
+            overlapping_clusters = section_data.overlapping_clusters
 
             formatted_start = f"{int(section_start / framerate / 60)}:{int(section_start / framerate % 60)}"
             formatted_end = f"{int(section_end / framerate / 60)}:{int(section_end / framerate % 60)}"
 
             print(f"{formatted_start} - {formatted_end}")
 
-            for (key1, key2), overlap_data in overlapping_clusters.items():
-                start1, end1 = overlap_data["bounds"][key1]
-                start2, end2 = overlap_data["bounds"][key2]
+            for overlap_data in overlapping_clusters:
+                key1, key2 = overlap_data.clusters.keys()
+
+                start1, end1 = overlap_data.bounds[key1]
+                start2, end2 = overlap_data.bounds[key2]
 
                 start = min(start1, start2)
                 end = max(end1, end2)
 
-                print(f"\t{key1} - {key2} ({overlap_data['overlap']} frames overlap)")
-                formatted_start = f"{int(start / framerate / 60)}:{int(start / framerate % 60)}"
-                formatted_end = f"{int(end / framerate / 60)}:{int(end / framerate % 60)}"
+                key1_formatted = chr(key1 + 65)
+                key2_formatted = chr(key2 + 65)
+
+                print(f"\t{key1_formatted} - {key2_formatted} ({overlap_data.overlap} frames overlap)")
+                formatted_start = f"{int(start / framerate / 60)}:{int(start / framerate % 60)}.{int(start / framerate % 1 * 1000)}"
+                formatted_end = f"{int(end / framerate / 60)}:{int(end / framerate % 60)}.{int(end / framerate % 1 * 1000)}"
                 print(f"\t\t{formatted_start} - {formatted_end}")
 
-                artifact_id = get_artifact_id(video_path, start, end, framerate)
+                artifact_id = get_artifact_id(video_path, start, end, framerate, [key1_formatted, key2_formatted])
 
                 sample = get_video_section_sample(start, end)
 
-                section_img, section_metadata = present_section(sample, overlap_data["clusters"])
+                section_img, section_metadata = present_section(sample, overlap_data.clusters)
                 
                 save_section_presentation(artifact_id, section_img, section_metadata)
-
-                overlap_data["artifact_id"] = artifact_id
 
                 video_frame = np.array(Image.open(BytesIO(section_img)))
                 v_out.write(cv2.cvtColor(video_frame, cv2.COLOR_RGB2BGR))
@@ -763,18 +785,29 @@ def track_video(video_path, detections, tracking="declustered"):
         ignore_zones: list[IgnoreZone] = []
 
         for (section_start, section_end), section_data in video_sections.items():
-            section_detections = section_data["detections"]
-            clustered_detections = section_data["clustered_detections"]
-            clustered_detections_minus_noise = section_data["clustered_detections_minus_noise"]
-            overlapping_clusters = section_data["overlapping_clusters"]
+            section_detections = section_data.detections
+            clustered_detections = section_data.clustered_detections
+            clustered_detections_minus_noise = section_data.clustered_detections_minus_noise
+            overlapping_clusters = section_data.overlapping_clusters
 
             new_ignore_zone = None
 
             if len(overlapping_clusters) > 0:
                 secondary_ids = []
 
-                for (key1, key2), overlap_data in overlapping_clusters.items():
-                    artifact_id = overlap_data["artifact_id"]
+                for overlap_data in overlapping_clusters:
+                    key1, key2 = overlap_data.clusters.keys()
+
+                    start1, end1 = overlap_data.bounds[key1]
+                    start2, end2 = overlap_data.bounds[key2]
+
+                    start = min(start1, start2)
+                    end = max(end1, end2)
+
+                    key1_formatted = chr(key1 + 65)
+                    key2_formatted = chr(key2 + 65)
+
+                    artifact_id = get_artifact_id(video_path, start, end, framerate, [key1_formatted, key2_formatted])
 
                     section_img, section_metadata = load_section_presentation(artifact_id)
 
@@ -944,13 +977,21 @@ def save_section_presentation(artifact_id, image_bytes, metadata: str):
     
     return presentation_image_path, presentation_metadata_path
 
-def get_artifact_id(video_path, start_frame, end_frame, framerate, cluster_labels=[]):
+def get_artifact_id(video_path, start_frame, end_frame, framerate, cluster_labels):
     video_name = os.path.basename(video_path)
 
-    start_s = f"{int(start_frame / framerate // 60):02d}-{int(start_frame / framerate % 60):02d}"
-    end_s = f"{int(end_frame / framerate // 60):02d}-{int(end_frame / framerate % 60):02d}"
+    start_minutes = int(start_frame / framerate // 60)
+    start_seconds = int(start_frame / framerate % 60)
+    start_milliseconds = int((start_frame / framerate % 60 - start_seconds) * 1000)
 
-    presentation_file_stem = "_".join([video_name, start_s, end_s] + cluster_labels)
+    end_minutes = int(end_frame / framerate // 60)
+    end_seconds = int(end_frame / framerate % 60)
+    end_milliseconds = int((end_frame / framerate % 60 - end_seconds) * 1000)
+
+    start_formatted = f"{start_minutes:02d}-{start_seconds:02d}.{start_milliseconds:03d}"
+    end_formatted = f"{end_minutes:02d}-{end_seconds:02d}.{end_milliseconds:03d}"
+
+    presentation_file_stem = "_".join([video_name, start_formatted, end_formatted] + cluster_labels)
 
     return presentation_file_stem
 
@@ -1163,7 +1204,7 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
         box_bry = min(bg_image.shape[0], box_bry)
 
         # HACK create a detection object for the label box, so that it can be merged with the rest of the cluster
-        cluster_duplicate = [Detections.merge([frame_detections]) for frame_detections in cluster]
+        cluster_duplicate = [copy.copy(frame_detections) for frame_detections in cluster]
         temp_detection = Detections(np.array([[box_tlx, box_tly, box_brx, box_bry]]), None, np.array([1]), np.array([0]))
         cluster_duplicate[-1] = Detections.merge([cluster_duplicate[-1], temp_detection])
 
