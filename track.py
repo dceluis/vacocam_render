@@ -884,14 +884,14 @@ class Color:
     lab: list[int]
 
 colors = [
-    Color(name="Blue", hex="0015ff", rgb=[0,21,255], cmyk=[100,92,0,0], hsb=[235,100,100], hsl=[235,100,50], lab=[33,76,-106]),
-    Color(name="Pumpkin", hex="ff7300", rgb=[255,115,0], cmyk=[0,55,100,0], hsb=[27,100,100], hsl=[27,100,50], lab=[65,49,73]),
-    Color(name="Chartreuse", hex="90fe00", rgb=[144,254,0], cmyk=[43,0,100,0], hsb=[86,100,100], hsl=[86,100,50], lab=[90,-63,86]),
-    Color(name="Violet", hex="8400ff", rgb=[132,0,255], cmyk=[48,100,0,0], hsb=[271,100,100], hsl=[271,100,50], lab=[41,83,-92]),
+    # Color(name="Blue", hex="0015ff", rgb=[0,21,255], cmyk=[100,92,0,0], hsb=[235,100,100], hsl=[235,100,50], lab=[33,76,-106]),
+    # Color(name="Pumpkin", hex="ff7300", rgb=[255,115,0], cmyk=[0,55,100,0], hsb=[27,100,100], hsl=[27,100,50], lab=[65,49,73]),
+    # Color(name="Chartreuse", hex="90fe00", rgb=[144,254,0], cmyk=[43,0,100,0], hsb=[86,100,100], hsl=[86,100,50], lab=[90,-63,86]),
+    # Color(name="Violet", hex="8400ff", rgb=[132,0,255], cmyk=[48,100,0,0], hsb=[271,100,100], hsl=[271,100,50], lab=[41,83,-92]),
     Color(name="Red", hex="ff0a12", rgb=[255,10,18], cmyk=[0,96,93,0], hsb=[358,96,100], hsl=[358,100,52], lab=[54,80,63]),
     Color(name="Yellow", hex="fffb00", rgb=[255,251,0], cmyk=[0,2,100,0], hsb=[59,100,100], hsl=[59,100,50], lab=[96,-20,94]),
     Color(name="Cyan", hex="00fff7", rgb=[0,255,247], cmyk=[100,0,3,0], hsb=[178,100,100], hsl=[178,100,50], lab=[91,-50,-10]),
-    Color(name="Rose", hex="ff00a1", rgb=[255,0,161], cmyk=[0,100,37,0], hsb=[322,100,100], hsl=[322,100,50], lab=[56,87,-14]),
+    # Color(name="Rose", hex="ff00a1", rgb=[255,0,161], cmyk=[0,100,37,0], hsb=[322,100,100], hsl=[322,100,50], lab=[56,87,-14]),
 ]
 
 def encode_image(image_bytes):
@@ -1086,9 +1086,10 @@ def find_place_for_box(cluster: list[Detections], box_height, box_width, image_h
 
 metadata_type = List[Tuple[str, float, float, float, int, int, int, Color]]
 
+import hashlib
+
 def present_section(bg_image, clustered_detections: dict[int, list[Detections]], ignore_noise=True):
     metadata: metadata_type = []
-    picked_colors = []
 
     if bg_image is None:
         bg_image = np.zeros((1080, 1920, 3), dtype=np.uint8)
@@ -1099,6 +1100,19 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
         bg_image_hsv = cv2.cvtColor(bg_image, cv2.COLOR_BGR2HSV)
         bg_image_hsv[:, :, 1] = bg_image_hsv[:, :, 1] * 0.6
         bg_image = cv2.cvtColor(bg_image_hsv, cv2.COLOR_HSV2BGR)
+    
+    image_as_bytes = bg_image.tobytes()
+    cluster_keys = list(clustered_detections.keys())
+    cluster_keys = [key % 256 for key in cluster_keys]
+    keys_as_bytes = bytes(cluster_keys)
+
+    hash_object = hashlib.sha256(image_as_bytes + keys_as_bytes)
+    hash_hex = hash_object.hexdigest()
+    seed_value = int(hash_hex, 16) % (2 ** 32)
+    random.seed(seed_value)
+
+    colors_shuffled = copy.deepcopy(colors)
+    random.shuffle(colors_shuffled)
 
     for idx, (label, cluster) in enumerate(clustered_detections.items()):
         if ignore_noise and label == -1:
@@ -1114,9 +1128,7 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
         median_size = cluster_mean[2]
         cluster_size = len(cluster_data)
 
-        # pick a random color not in the picked_colors
-        color = random.choice([c for c in colors if c.name not in picked_colors])
-        picked_colors.append(color.name)
+        color = colors_shuffled[idx % len(colors_shuffled)]
 
         cluster_start_frame = 0
         cluster_end_frame = len(cluster) - 1
