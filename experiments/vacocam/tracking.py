@@ -38,7 +38,7 @@ def cluster_detections(detections_list: List[Detections], preset=None):
     detections_lengths = [0] * len(detections_list)
 
     for idx, frame_detections in enumerate(detections_list):
-        for xyxy, _, conf, cls, _ in frame_detections:
+        for xyxy, _, conf, cls, *_ in frame_detections:
             det_xyxy = np.zeros((1, 4))
             det_xyxy[0] = xyxy
             det_conf = np.array([conf])

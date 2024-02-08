@@ -483,7 +483,7 @@ def cluster_detections(detections_list: List[Detections], preset=None):
 
     if preset == 'static':
         eps = 0.02
-        min_samples = 300
+        min_samples = 15
     elif preset == 'play':
         eps = 0.85
         min_samples = 5
@@ -495,8 +495,11 @@ def cluster_detections(detections_list: List[Detections], preset=None):
     AREA_scaled = StandardScaler().fit_transform(AREA.reshape(-1, 1))
     FRAME_scaled = MinMaxScaler().fit_transform(FRAME.reshape(-1, 1)) * 4 - 2
 
-    # concatenate the scaled x, y and area values
-    DATA = np.hstack((X_Y_scaled, AREA_scaled, FRAME_scaled))
+    if preset == 'static':
+        DATA = X_Y_scaled
+    else:
+        DATA = np.hstack((X_Y_scaled, AREA_scaled, FRAME_scaled))
+
     dbscan = DBSCAN(eps=eps, min_samples=min_samples)
     X_clusters = dbscan.fit_predict(DATA)
 
@@ -702,8 +705,7 @@ def track_video(video_path, detections: List[Detections], tracking="declustered"
                         overlapping_clusters_key_pairs = [(oc.clusters.keys(), (key1, key2)) for oc in overlapping_clusters]
 
                         if (key1, key2) in overlapping_clusters_key_pairs or (key2, key1) in overlapping_clusters_key_pairs:
-                            pass
-                            # continue
+                            continue
                         if overlap < min(end1 - start1, end2 - start2) * 0.5:
                             continue
                         if end1 - start1 < 15 or end2 - start2 < 15 or overlap < 15:
@@ -786,6 +788,8 @@ def track_video(video_path, detections: List[Detections], tracking="declustered"
         ignore_zones: list[IgnoreZone] = []
 
         for (section_start, section_end), section_data in video_sections.items():
+            # FIX!!!!!!
+            # when we ignore clusters. we need to make sure that its removed for good. so subsequent cluster pairings dont compare already ignored clusters
             section_detections = section_data.detections
             clustered_detections = section_data.clustered_detections
             clustered_detections_minus_noise = section_data.clustered_detections_minus_noise
