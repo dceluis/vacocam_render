@@ -1,3 +1,0 @@
-id, color
-C, Blue
-F, Pumpkin

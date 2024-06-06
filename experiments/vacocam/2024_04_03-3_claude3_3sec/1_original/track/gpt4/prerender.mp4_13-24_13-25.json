@@ -1,0 +1,1 @@
+{"id": "msg_01HG5ivWetsQs5BBTiqMyTz4", "content": [{"text": "[{\"id\":\"A\",\"primary\":true,\"reason\":\"primary ball\"},{\"id\":\"B\",\"primary\":false,\"reason\":\"not ball\"}]", "type": "text"}], "model": "claude-3-haiku-20240307", "role": "assistant", "stop_reason": "end_turn", "stop_sequence": null, "type": "message", "usage": {"input_tokens": 1914, "output_tokens": 33}}

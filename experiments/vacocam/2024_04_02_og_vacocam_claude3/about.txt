@@ -1,0 +1,9 @@
+this experiment runs the exact original configuration but with claude3-haiku instead of gpt4-vision-preview.
+
+Results:
+
+* The vision capabilities SEEM slightly degraded. INCONCLUSIVE
+* The cost is very reduced, about 10 times less expensive to run on claude3 haiku than the original gpt4 vision.
+
+
+Less accuracy for more recall (since we can run vision on more frames, given the reduced cost)

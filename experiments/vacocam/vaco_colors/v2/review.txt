@@ -1,0 +1,17 @@
+What was done:
+I assigned completely random colors
+
+What whas observed:
+Confirmed the bias towards the blue being selected as primary.
+Pumpkin also has a negative bias.
+Blue seems to be associated with "correct" and Pumpkin with "incorrect"
+I think its because since these are the two first matplotlib colors they might have biased the visual model.
+
+What I also noticed in this experiment is that letters might also have a bias.
+With A being marked as primary most of the times. B and C less so. D and later letters mostly marked as secondary.
+
+Next steps:
+Remove blue and pumpkin from the palette of colors, and evaluate the distribution of primary among the remaining colors
+Randomize letters as well, to see if the bias is with the letters or, on the contraty, with the fact that the biggest clusters
+tend to be assigned letters first.
+Easier: Maybe stop using letters and markers and use numbers instead?

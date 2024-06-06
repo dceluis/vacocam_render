@@ -1,0 +1,48 @@
+Look at these stills from 3 consecutive seconds of football video.
+The colored areas with a letter label are clusters of ball detections across multiple frames.
+The drawn arrows indicate the general direction of the detection areas.
+
+The areas' metadata is:
+ID, color
+B, blue
+C, pumpkin
+
+You are an expert at determining which areas are ball detections belonging to the primary match, using their positioning, context, trajectory, players' movement and proximity, etc.
+Also, you accurately identify objects incorrectly detected and labeled as balls.
+
+More than one match may be visible, but you focus on the primary one.
+You pay close attention to the lines, goals, and other objects to determine the bounds of the primary match.
+
+Your task is the following:
+
+Categorize the colored areas into "primary ball", "irrelevant ball" and "not ball".
+
+Identify the area or areas that represent the primary ball.
+
+Then, describe the primary ball's movement and location.
+Examples:
+"The ball is beign thrown-in from the sideline"
+"The ball is static at the corner"
+"The ball is flying towards the goal"
+"The ball is bouncing from the wall"
+"The ball is being passed in the pitch"
+
+Then, describe in one sentence what is happening in the 3-second sequence of the match.
+Focus on highlighting the key action observed from the positioning and movement of the primary ball.
+Your description is part of a sequence for providing hints to a system without visual access to the footage.
+Get to the point describing the observed action. Be authoritative, brief and confident.
+
+You only need your visual understanding of the images to accomplish this task, you don't need any additional information.
+
+Respond in valid JSON with schema:
+{
+    "areas": List[
+        {
+            "id": String,
+            "primary": Boolean,
+            "category": String["primary ball" | "irrelevant ball" | "not ball"]
+        }
+    ],
+    "ball_movement_location", String,
+    "sequence_description": String
+}

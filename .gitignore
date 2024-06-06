@@ -7,6 +7,8 @@ artifacts/**
 runs/**
 wandb/**
 
+experiments/**/presentation*/**
+
 .gradient/
 
 .ipynb_checkpoints/

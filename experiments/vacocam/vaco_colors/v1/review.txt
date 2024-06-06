@@ -1,0 +1,6 @@
+This version is heavily skewed towards blue being the primary cluster
+
+Maybe its because we are comparing "blue" vs "pumpkin", and calling pumpkin orange might improve the results
+
+The blue bias seems to be consistent.
+By accident, the code submitted the cluster pairs twice: one for pair A - B and once for B - A, with only the colors switched.

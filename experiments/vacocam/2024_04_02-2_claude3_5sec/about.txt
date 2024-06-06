@@ -1,0 +1,121 @@
+# Experiment 1
+
+This experiment is the same as the original claude3 haiku experiment but trying 5 second sections.
+
+## Hypothesis:
+
+* We will find less cluster overlaps, given the reduced section length.
+* Fewer false positives. (less primary-ball to primary-ball overlaps)
+* The overall seen video will be less, as a result of the above.
+  (for the og experiment we saw 24 sections of 10 sec = 240s, my guess for this experiment is ~16 sections of 5 sec = 80s)
+
+## Observations:
+
+* We indeed found less overlaps. (20 ovelaps)
+* We actually got MORE primary to primary overlaps.
+* The overall seen video was indeed less: 20 sections * 5 sec = 100s
+
+## Results:
+
+This experiment surfaced an outstanding problem with the clustering process.
+
+First, an small overview of the project:
+
+Vacocam relies many processes working correctly for a good result:
+
+VLLM Computer Vision.
+  --- depends on ---> Spatial-Temporal Feature Clustering.
+     --- depends on ---> Computer Vision Feature Extraction.
+
+From the bottom up:
+
+* (1) CV Feature Extraction:
+  We train and run a cheap Feature Extractor, in this case its a YOLO-like object detector. The feature we extract is the ball position, so we trained
+  the object detection model on real balls, preferably using footage in the same distribution as the footage to detect.
+
+* (2) Feature Clustering
+  The previous step gives us position annotations for every frame of the video. But using these alone is not enough to properly focus a video.
+
+  The reason is that detecting real sports footage usually results in a combination of the following:
+  - (A) Sections where the main ball is seen/detected (attention)
+  - (B) Sections where unrelated ball(s) is seen/detected (distraction)
+
+  - (C) Sections where no ball is in frame (occlusion).
+        resulting in undesirable _drifting_ of the point of focus.
+  - (D) Sections where (A) and (B) are true,
+        resulting in undesirable _confusion_, focusing somewhere in the middle between (A) and (B).
+  - (E) Sections where only (A) is true,
+        resulting in most desirable _focus_ at the main ball.
+  - (F) Sections where only (B) is true,
+        resulting in very undesirable _peeking_ at the distracting ball.
+  - (G) Sections where an object like a light pole, a hat or another random object is detected as a ball.
+        These usually behave as a worse version of a (B) distraction, given their static nature,
+        resulting in most undesirable _fixation_.
+
+  So we use Feature Clustering:
+  - (2.1) As a preprocessing step: The "static" preset finds detections that cluster around very small areas over long periods of time. Thus,
+    we prioritize movement and reduce fixation in false balls, true-unrelated balls, and true-primary balls*.
+  - (2.2) As a processing step: The "play" preset clusters the moving detections and presents them on a single frame (presentation).
+    This presented frame is ready for the VLLM step, and we will be able to augment/filter the clusters using the VLLM results.
+
+
+  * NOTE: Ideally we would allow fixating in true-primary.  But I dont see how to do this in the Clustering step.
+    We would need to send the static clusters to VLLM evaluation, just as the moving clusters.
+    
+* (3) VLLM Computer Vision:
+  We show sections of footage with clusters of ball detections to a vision-capable model.
+  Paraphrasing the complete query, we ask: "Which cluster represents the primary ball in movement?".
+
+  We do this to filter out clusters unrelated to the game of interest.
+  This way, we end up with moving clusters of ball positions, that when focused, produce a properly tracked video of the match.
+
+
+* (4) Postprocessing + Rendering
+  Wont go too deeply here, but we try to be smart about the truth we got from the VLLM, and filter out even more clusters.
+  Right now its not too smart, boldly ignoring whole areas of the video*.
+
+  * TBF, I already got an idea: using a general purpose feature extractor like BLIP to encode all clusters, and then do a similarity search to find
+    other clusters to ignore. If this works it would be much better than ignoring a whole pixel area like we are doing right now.
+
+
+If you were following closely, the essence of Vacocam is Confusion (2.D) Detection and disambiguation using a VLLM.
+Extrapolating this truth we got from the VLMM to reduce (2.F) to a (2.C) problem and (2.D) to (2.E) scenarios.
+
+
+Now again for the problem found.
+The vision resolution (in this case reduced section length = more resolution) interacts with the clustering algorithm.
+Since the clustering algo uses StandardScaler(), smaller sections will have less variance of the seen positions of the ball.
+Thus, smaller position deltas will get considered part of a different cluster, splitting a primary cluster into two (potentially overlapping) ones.
+
+The ball clustering algorithm's precision consists in correctly clustering the detections for a single ball together.
+If the clustering parameters are too aggresive for the section length, an incorrect clustering can happen, like it did on this experiment.
+
+The tuning of the clustering parameters is still a manual process, and it depends on many things other than the section length. For example
+ball speed, sport characteristics, camera field-of-view, etc. can all require different tunings.
+
+1. One solution could be to try to programatically try different clustering parameters for each section, and ranking the results based on some TBD metrics,
+like coverage, cluster count, etc.
+2. Furthermore, another approach could be to try different clusterings but let the VLLM do the ranking. This would mean 2-passing each section.
+One to find the correct clustering and another to figure out the wrong clusters.
+3. Even more, we could get rid of programatic clustering altogether, and let the VLLM do the clustering.
+For example, tagging every detection box with a label. (AA, AB, AC, AD... etc.) and letting the VLLM say which detections boxes belong to the primary ball.
+As VLLMs queries get cheaper and resolutions bigger, this might become a valid approach. But the accuracy is TBD.
+
+
+# Experiment 2
+
+This is the same as above but the "play" clustering algorithm uses 1.85 eps instead of 0.85
+
+This brought the detected overlaps to only 15, and most importantly, avoids splitting many same ball / primary clusters into two (or more)
+
+
+# Experiment 3
+
+This experiment consecutively tried more clustering algorithms.
+The configuration I feel most comfortable with is:
+* Use Width and Height  instead of area as datapoints to cluster. Mostly because moving ball detections might look stretched/ rectangular.
+  And the area data alone does not take into account this movement, and might cluster this datapoint with other (square or perpendicularly stretched)
+  ball detections, only because the areas are similar.
+* Ditch StandardScaler and just divide the X and Y, and W and H to the max width and height of the frame
+* Reduce the eps value of the play preset to 0.25
+* Tune both the spatial and the temporal clustering strength through special parameters

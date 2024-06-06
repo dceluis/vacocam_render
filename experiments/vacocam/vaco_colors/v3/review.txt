@@ -1,0 +1,8 @@
+What was done:
+Removed blue
+
+Observed:
+Still some colors are biased. Probably since they are now random they get paired with ones with small tint distance
+
+Will do:
+Reduce the palette further to just three colors

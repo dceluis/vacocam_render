@@ -1,0 +1,29 @@
+
+This experiment is the same as the previous claude3 haiku experiment but trying 3 second sections.
+
+This can achieve 2 things. One it makes every section image more relevant to the clusters. And two, it opens up the possibility
+of trying something ive been thingking will improve the quality: internal thought processes.
+
+The idea is that for every section, we will make the VLLM write a small description of whats happening. This can be presented so adjacent sections
+so the context can carryover, and create a consistent narrative, that will hopefully increase the precision of the evaluations.
+
+I think 3 seconds is kind of a goldilocks number because in my tests, when im skimming through footage 3 second jumps let me follow whats actually
+happening in the game. Anything over 3 seconds is too big of a jump, and I lose track of the action.
+
+It would also nicely bring the cost of supervising one minute of footage to 1 cent, based on current claude haiku prices.
+
+
+## Parameters:
+
+I removed the cleanup of small clusters. This will allow us to find more overlaps to properly seed the vision process.
+The cleanup is still useful, so I think i will move it to a post-VLLM process in the rendering step
+I also found that a good setup is to have eps at 0.25, spatial distancing at 1 and temporal distancing at about 1.5 the spatial distancing
+
+## Results
+
+Indeed, the closer relationship of the snapshot to the cluster information makes the accuracy much better.
+We got 0.93 accuracy in the VLLM test, which more than confirms that claude-3-haiku as an appropriate VLLM engine
+
+I did not attempt any thought process generation, but I suspect this could bring accuracy even higher,
+since the 2 failing scenarios are ambiguous even to the human eye.
+I had to look at the original footage to figure out what was happening.

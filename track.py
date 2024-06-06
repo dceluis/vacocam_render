@@ -9,7 +9,7 @@ from scipy.interpolate import UnivariateSpline
 
 from core.detections import Detections, load_video_detections, save_video_detections
 
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 
 class IgnoreZone:
     def __init__(self, pixels: set[tuple[int, int]], min_area: Optional[int], max_area: Optional[int]):
@@ -206,7 +206,7 @@ def calc_interests_new(detections_list: list[Detections]):
     
     for idx, frame_detections in enumerate(detections_list):
         new_detections = copy.copy(frame_detections)
-        new_detections.point_of_interest = tuple(map(int, (X_interpolated[idx], Y_interpolated[idx])))
+        new_detections.point_of_interest = (int(X_interpolated[idx]), int(Y_interpolated[idx]))
         new_detections.area_of_interest = int(A_interpolated[idx])
         result.append(new_detections)
 
@@ -443,12 +443,12 @@ import matplotlib.image as mpimg
 from typing import List, Tuple
 from dataclasses import dataclass
 
-from core.gpt4 import submit_image as submit_image_to_gpt4
+from core.vllm import submit_image as submit_image_to_vllm
 from core.detections import Detections, load_video_detections, save_video_detections
 
-def cluster_detections(detections_list: List[Detections], preset=None):
+def cluster_detections(detections_list: List[Detections], image_height=1, image_width=1, preset=None):
     X_Y = []
-    AREA = []
+    W_H = []
     FRAME = []
 
     DATA_FLAT: List[Detections] = []
@@ -464,8 +464,8 @@ def cluster_detections(detections_list: List[Detections], preset=None):
             x = (xyxy[0] + xyxy[2]) / 2
             y = (xyxy[1] + xyxy[3]) / 2
 
-            X_Y.append((x, y))
-            AREA.append((xyxy[2] - xyxy[0]) * (xyxy[3] - xyxy[1]))
+            X_Y.append((x / image_width, y / image_height))
+            W_H.append(((xyxy[2] - xyxy[0]) / image_width, (xyxy[3] - xyxy[1]) / image_height))
             FRAME.append(idx)
 
             DATA_FLAT.append(Detections(det_xyxy, None, det_conf, det_cls))
@@ -473,7 +473,7 @@ def cluster_detections(detections_list: List[Detections], preset=None):
         detections_lengths[idx] = len(frame_detections)
 
     X_Y = np.array(X_Y)
-    AREA = np.array(AREA)
+    W_H = np.array(W_H)
     FRAME = np.array(FRAME)
 
     if len(DATA_FLAT) == 0:
@@ -481,38 +481,30 @@ def cluster_detections(detections_list: List[Detections], preset=None):
     elif len(DATA_FLAT) == 1:
         return {-1: detections_list}
 
+    spatial_distance_factor = 1.0
+    temporal_distance_factor = 1.4
+
     if preset == 'static':
         eps = 0.02
-        min_samples = 15
+        min_samples = 300
     elif preset == 'play':
-        eps = 0.85
+        eps = 0.25
         min_samples = 5
     else:
         eps = 0.5
         min_samples = 50
 
-    X_Y_scaled = StandardScaler().fit_transform(X_Y)
-    AREA_scaled = StandardScaler().fit_transform(AREA.reshape(-1, 1))
-    FRAME_scaled = MinMaxScaler().fit_transform(FRAME.reshape(-1, 1)) * 4 - 2
+    X_Y_scaled = X_Y * spatial_distance_factor
+    W_H_scaled = W_H * spatial_distance_factor
+    FRAME_scaled = MinMaxScaler().fit_transform(FRAME.reshape(-1, 1)) * temporal_distance_factor
 
     if preset == 'static':
         DATA = X_Y_scaled
     else:
-        DATA = np.hstack((X_Y_scaled, AREA_scaled, FRAME_scaled))
+        DATA = np.hstack((X_Y_scaled, W_H_scaled, FRAME_scaled))
 
     dbscan = DBSCAN(eps=eps, min_samples=min_samples)
     X_clusters = dbscan.fit_predict(DATA)
-
-    if preset == 'play':
-        min_samples_real = 15
-        # count the number of detections in each cluster
-        cluster_counts = np.bincount(X_clusters + 1)
-        # get the indices of the clusters with less than min_sampbles_real detections
-        small_clusters = np.where(cluster_counts < min_samples_real)[0]
-
-        # set the labels of the small clusters to -1 (noise)
-        for cluster in small_clusters:
-            X_clusters[X_clusters == cluster - 1] = -1
 
     unique_labels = list(map(int, set(X_clusters)))
 
@@ -542,13 +534,12 @@ def cluster_detections(detections_list: List[Detections], preset=None):
 
     return clustered_detections
 
-def track_video(video_path, detections: List[Detections], tracking="declustered"):
+def track_video(video_path, detections: List[Detections], tracking="declustered", vllm="claude3"):
     if tracking == "declustered":
-        clustered_detections = cluster_detections(detections, preset="static")
+        video_info = sv.VideoInfo.from_video_path(video_path)
+        clustered_detections = cluster_detections(detections, image_height=video_info.height, image_width=video_info.width, preset="static")
 
         if 'CLUSTER_PREVIEW' in os.environ:
-            video_info = sv.VideoInfo.from_video_path(video_path)
-
             unique_cluster_ids = clustered_detections.keys()
 
             print(f"Number of clusters: {len(unique_cluster_ids)} ({', '.join(str(cluster_id) for cluster_id in unique_cluster_ids)})")
@@ -582,36 +573,53 @@ def track_video(video_path, detections: List[Detections], tracking="declustered"
 
         filtered_detections = clustered_detections[-1]
     elif tracking == "vacocam":
-        seconds = 10
+        seconds = 3
 
         video_info = sv.VideoInfo.from_video_path(video_path)
 
         framerate = video_info.fps
         total_frames = video_info.total_frames or 0
+        video_height = video_info.height
+        video_width = video_info.width
 
         frame_indices = [(i * seconds * framerate, (i + 1) * seconds * framerate) for i in range(int(total_frames / (seconds * framerate)))]
         if frame_indices[-1][1] != total_frames:
             frame_indices.append((frame_indices[-1][1], total_frames))
 
-        def get_video_section_sample(start, end):
-            # find a frame in the middle of the section, but provided it has detections
-            mid = int((start + end) / 2)
+        cap = cv2.VideoCapture(video_path)
 
-            while len(detections[mid]) == 0:
-                mid += 1
+        def sample_video_section(start, end, samples=1) -> Union[np.ndarray, List[np.ndarray]]:
 
-            cap = cv2.VideoCapture(video_path)
+            section_duration = end - start
 
-            cap.set(cv2.CAP_PROP_POS_FRAMES, mid)
-            ret, sample = cap.read()
+            if section_duration < samples:
+                raise Exception("Section duration is less than the number of samples")
+            if samples < 1:
+                raise Exception("Number of samples must be greater than 0")
             
-            if not ret:
-                raise Exception("Error reading video")
+            # Select the last frame of each sample
+            section_split: list[int] = (np.linspace(start, end, samples + 1)[1:].astype(int) - 1).tolist()
 
-            sample = cv2.cvtColor(sample, cv2.COLOR_BGR2RGB)
+            print(f"Section duration: {section_duration}")
+            print(f"Samples: {samples}")
+            print(f"Section start: {start} - Section end: {end}")
+            print(f"Section split: {section_split}")
 
-            cap.release()
-            return sample
+            sampled_frames = []
+
+            for frame_number in section_split:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+                ret, frame = cap.read()
+                if not ret:
+                    raise Exception("Error reading video")
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                sampled_frames.append(frame)
+            
+            if samples == 1:
+                return sampled_frames[0]
+            else:
+                return sampled_frames
         
         def get_ignore_zone_from_cluster(cluster: list[Detections]):
             # first, flatten the detections to a numpy array
@@ -671,61 +679,84 @@ def track_video(video_path, detections: List[Detections], tracking="declustered"
         video_sections: dict[Tuple[int, int], VideoSection] = {}
         overlaps_count = 0
 
+        detections_sum = 0
+        clustered_sum = 0
+
         for start, end in frame_indices:
             section_detections = detections[start:end]
-            clustered_detections = cluster_detections(section_detections, preset="play")
+            clustered_detections = cluster_detections(section_detections, image_height=video_info.height, image_width=video_info.width, preset="play")
             clustered_detections_minus_noise = { key: detections for key, detections in clustered_detections.items() if key != -1 }
 
-            # find clusters start and ends
-            start_ends: dict[int, tuple[int, int]] = { key: (0, 0) for key in clustered_detections_minus_noise.keys() }
+            detections_sum_section = sum([len(detections) for detections in section_detections])
+            clustered_sum_section = sum([len(detections) for detections_l in clustered_detections_minus_noise.values() for detections in detections_l])
 
-            for key, c_detections in clustered_detections_minus_noise.items():
-                # find start of the cluster, meaning the index of the first detection that is not empty. (len(detection) > 0)
-                cluster_start = 0
-                for i, detection in enumerate(c_detections):
-                    if len(detection) > 0:
-                        cluster_start = i
-                        break
-                # find end of the cluster, meaning the index of the last detection that is not empty. (len(detection) > 0)
-                cluster_end = 0
-                for i, detection in enumerate(reversed(c_detections)):
-                    if len(detection) > 0:
-                        cluster_end = len(c_detections) - i
-                        break
-                start_ends[key] = (cluster_start, cluster_end)
-            
+            detections_sum += detections_sum_section
+            clustered_sum += clustered_sum_section
+
+            print(f"Detection count: {detections_sum_section}, Clustered count: {clustered_sum_section}")
+
             # now find any overlapping clusters
             overlapping_clusters: List[OverlappingCluster] = []
 
-            for key1, (start1, end1) in start_ends.items():
-                for key2, (start2, end2) in start_ends.items():
-                    if key1 != key2 and start1 < end2 and end1 > start2:
-                        overlap = min(end1, end2) - max(start1, start2)
+            if len(clustered_detections_minus_noise) > 1:
+                overlapping_cluster = OverlappingCluster(
+                    overlap=end - start,
+                    clusters=clustered_detections_minus_noise,
+                    bounds={ key: (start, end) for key in clustered_detections_minus_noise.keys() }
+                )
+                overlapping_clusters.append(overlapping_cluster)
+                overlaps_count += 1
 
-                        overlapping_clusters_key_pairs = [(oc.clusters.keys(), (key1, key2)) for oc in overlapping_clusters]
+            # # find clusters start and ends
+            # start_ends: dict[int, tuple[int, int]] = { key: (0, 0) for key in clustered_detections_minus_noise.keys() }
 
-                        if (key1, key2) in overlapping_clusters_key_pairs or (key2, key1) in overlapping_clusters_key_pairs:
-                            continue
-                        if overlap < min(end1 - start1, end2 - start2) * 0.5:
-                            continue
-                        if end1 - start1 < 15 or end2 - start2 < 15 or overlap < 15:
-                            continue
+            # for key, c_detections in clustered_detections_minus_noise.items():
+            #     # find start of the cluster, meaning the index of the first detection that is not empty. (len(detection) > 0)
+            #     cluster_start = 0
+            #     for i, detection in enumerate(c_detections):
+            #         if len(detection) > 0:
+            #             cluster_start = i
+            #             break
+            #     # find end of the cluster, meaning the index of the last detection that is not empty. (len(detection) > 0)
+            #     cluster_end = 0
+            #     for i, detection in enumerate(reversed(c_detections)):
+            #         if len(detection) > 0:
+            #             cluster_end = len(c_detections) - i
+            #             break
+            #     start_ends[key] = (cluster_start, cluster_end)
+            
+            # # now find any overlapping clusters
+            # overlapping_clusters: List[OverlappingCluster] = []
 
-                        overlaps_count += 1
+            # for key1, (start1, end1) in start_ends.items():
+            #     for key2, (start2, end2) in start_ends.items():
+            #         if key1 != key2 and start1 < end2 and end1 > start2:
+            #             overlap = min(end1, end2) - max(start1, start2)
 
-                        overlapping_cluster = OverlappingCluster(
-                            overlap=overlap,
-                            clusters={
-                                key1: clustered_detections_minus_noise[key1],
-                                key2: clustered_detections_minus_noise[key2]
-                            },
-                            bounds={
-                                key1: (start + start1, start + end1),
-                                key2: (start + start2, start + end2)
-                            }
-                        )
+            #             overlapping_clusters_key_pairs = [tuple(oc.clusters.keys()) for oc in overlapping_clusters]
 
-                        overlapping_clusters.append(overlapping_cluster)
+            #             if (key1, key2) in overlapping_clusters_key_pairs or (key2, key1) in overlapping_clusters_key_pairs:
+            #                 continue
+            #             if overlap < min(end1 - start1, end2 - start2) * 0.5:
+            #                 continue
+            #             if end1 - start1 < 15 or end2 - start2 < 15 or overlap < 15:
+            #                 continue
+
+            #             overlaps_count += 1
+
+            #             overlapping_cluster = OverlappingCluster(
+            #                 overlap=overlap,
+            #                 clusters={
+            #                     key1: clustered_detections_minus_noise[key1],
+            #                     key2: clustered_detections_minus_noise[key2]
+            #                 },
+            #                 bounds={
+            #                     key1: (start + start1, start + end1),
+            #                     key2: (start + start2, start + end2)
+            #                 }
+            #             )
+
+            #             overlapping_clusters.append(overlapping_cluster)
             
             video_section = VideoSection(
                 detections=section_detections,
@@ -739,10 +770,13 @@ def track_video(video_path, detections: List[Detections], tracking="declustered"
         print("[VacomCam] Done finding overlaps")
         print("[VacomCam] Found {} overlaps".format(overlaps_count))
 
+        print("[VacomCam] Total detections: {}".format(detections_sum))
+        print("[VacomCam] Total clustered detections: {}".format(clustered_sum))
+
         ########## Save overlapping sections to disk
 
         # lets also make a video of the overlaps for easier viewing
-        v_out = cv2.VideoWriter("overlaps.mp4", cv2.VideoWriter_fourcc(*'mp4v'), framerate, (1920, 1080))
+        v_out = cv2.VideoWriter("overlaps.mp4", cv2.VideoWriter_fourcc(*'mp4v'), framerate, (video_width, video_height))
 
         for (section_start, section_end), section_data in video_sections.items():
             overlapping_clusters = section_data.overlapping_clusters
@@ -753,36 +787,41 @@ def track_video(video_path, detections: List[Detections], tracking="declustered"
             print(f"{formatted_start} - {formatted_end}")
 
             for overlap_data in overlapping_clusters:
-                key1, key2 = overlap_data.clusters.keys()
+                # key1, key2 = overlap_data.clusters.keys()
 
-                start1, end1 = overlap_data.bounds[key1]
-                start2, end2 = overlap_data.bounds[key2]
+                # start1, end1 = overlap_data.bounds[key1]
+                # start2, end2 = overlap_data.bounds[key2]
 
-                start = min(start1, start2)
-                end = max(end1, end2)
+                # start = min(start1, start2)
+                # end = max(end1, end2)
 
-                key1_formatted = chr(key1 + 65)
-                key2_formatted = chr(key2 + 65)
+                # key1_formatted = chr(key1 + 65)
+                # key2_formatted = chr(key2 + 65)
+                keys_formatted = [chr(key + 65) for key in overlap_data.clusters.keys()]
 
-                print(f"\t{key1_formatted} - {key2_formatted} ({overlap_data.overlap} frames overlap)")
-                formatted_start = f"{int(start / framerate / 60)}:{int(start / framerate % 60)}.{int(start / framerate % 1 * 1000)}"
-                formatted_end = f"{int(end / framerate / 60)}:{int(end / framerate % 60)}.{int(end / framerate % 1 * 1000)}"
+                print(f"\t{' - '.join(keys_formatted)} ({overlap_data.overlap} frames overlap)")
+                formatted_start = f"{int(section_start / framerate / 60)}:{int(section_start / framerate % 60)}.{int(section_start / framerate % 1 * 1000)}"
+                formatted_end = f"{int(section_end / framerate / 60)}:{int(section_end / framerate % 60)}.{int(section_end / framerate % 1 * 1000)}"
                 print(f"\t\t{formatted_start} - {formatted_end}")
 
-                artifact_id = get_artifact_id(video_path, start, end, framerate, [key1_formatted, key2_formatted])
+                artifact_id = get_artifact_id(video_path, section_start, section_end, framerate, keys_formatted)
 
-                sample = get_video_section_sample(start, end)
+                sample = sample_video_section(section_start, section_end, samples=3)
 
-                section_img, section_metadata = present_section(sample, overlap_data.clusters)
+                section_imgs, section_metadata = present_section(sample, overlap_data.clusters)
                 
-                save_section_presentation(artifact_id, section_img, section_metadata)
+                save_section_presentation(artifact_id, section_imgs, section_metadata)
 
-                video_frame = np.array(Image.open(BytesIO(section_img)))
-                v_out.write(cv2.cvtColor(video_frame, cv2.COLOR_RGB2BGR))
+                if not isinstance(section_imgs, list):
+                    section_imgs = [section_imgs]
+                
+                for section_img in section_imgs:
+                    video_frame = np.array(Image.open(BytesIO(section_img)))
+                    v_out.write(cv2.cvtColor(video_frame, cv2.COLOR_RGB2BGR))
 
         v_out.release()
 
-        # Send overlapping sections to GPT-4
+        # Send overlapping sections to VLLM
 
         filtered_detections = []
         ignore_zones: list[IgnoreZone] = []
@@ -801,45 +840,46 @@ def track_video(video_path, detections: List[Detections], tracking="declustered"
                 secondary_ids = []
 
                 for overlap_data in overlapping_clusters:
-                    key1, key2 = overlap_data.clusters.keys()
+                    # key1, key2 = overlap_data.clusters.keys()
 
-                    start1, end1 = overlap_data.bounds[key1]
-                    start2, end2 = overlap_data.bounds[key2]
+                    # start1, end1 = overlap_data.bounds[key1]
+                    # start2, end2 = overlap_data.bounds[key2]
 
-                    start = min(start1, start2)
-                    end = max(end1, end2)
+                    # start = min(start1, start2)
+                    # end = max(end1, end2)
 
-                    key1_formatted = chr(key1 + 65)
-                    key2_formatted = chr(key2 + 65)
+                    # key1_formatted = chr(key1 + 65)
+                    # key2_formatted = chr(key2 + 65)
 
-                    artifact_id = get_artifact_id(video_path, start, end, framerate, [key1_formatted, key2_formatted])
+                    keys_formatted = [chr(key + 65) for key in overlap_data.clusters.keys()]
+
+                    artifact_id = get_artifact_id(video_path, section_start, section_end, framerate, keys_formatted)
 
                     section_img, section_metadata = load_section_presentation(artifact_id)
 
                     if section_img is None or section_metadata is None:
                         raise Exception("Error loading section presentation")
 
-                    print(f"[VacomCam] Submitting section to GPT-4 ({artifact_id})")
-                    loaded_response = load_gpt4_response(artifact_id)
+                    print(f"[VacomCam] Submitting section to VLLM ({artifact_id})")
+                    loaded_response = load_vllm_response(artifact_id, vllm=vllm)
 
                     if loaded_response is not None:
-                        gpt4_response = loaded_response
+                        vllm_response = loaded_response
                     else:
-                        # raise Exception("Error loading GPT-4 response")
-                        gpt4_response = ask_gippity_for_primary_clusters(section_img, section_metadata)
+                        vllm_response = ask_vllm_for_primary_clusters(section_img, section_metadata, vllm=vllm)
                     
-                        if gpt4_response is None:
-                            print("GPT-4 response was None, SAVING EMPTY RESPONSE")
+                        if vllm_response is None:
+                            print("VLLM response was None, SAVING EMPTY RESPONSE")
 
-                        save_gpt4_response(artifact_id, gpt4_response)
+                        save_vllm_response(artifact_id, vllm_response, vllm=vllm)
 
-                    gpt4_response_parsed = parse_gpt4_response(gpt4_response)
+                    vllm_response_parsed = parse_vllm_response(vllm_response, vllm=vllm)
 
-                    if gpt4_response_parsed is None:
-                        print("GPT-4 response could not be parsed, skipping section")
+                    if vllm_response_parsed is None:
+                        print("VLLM response could not be parsed, skipping section")
                         continue
 
-                    overlap_secondary_ids = [ord(id) - 65 for id, is_primary in gpt4_response_parsed.items() if not is_primary]
+                    overlap_secondary_ids = [ord(id) - 65 for id, is_primary in vllm_response_parsed.items() if not is_primary]
                     secondary_ids.extend(overlap_secondary_ids)
 
                 # The little trick big tech doesn't want you to know about
@@ -887,56 +927,69 @@ class Color:
     hsl: list[int]
     lab: list[int]
 
-colors = [
+COLORS = [
     # Color(name="Blue", hex="0015ff", rgb=[0,21,255], cmyk=[100,92,0,0], hsb=[235,100,100], hsl=[235,100,50], lab=[33,76,-106]),
-    # Color(name="Pumpkin", hex="ff7300", rgb=[255,115,0], cmyk=[0,55,100,0], hsb=[27,100,100], hsl=[27,100,50], lab=[65,49,73]),
-    # Color(name="Chartreuse", hex="90fe00", rgb=[144,254,0], cmyk=[43,0,100,0], hsb=[86,100,100], hsl=[86,100,50], lab=[90,-63,86]),
-    # Color(name="Violet", hex="8400ff", rgb=[132,0,255], cmyk=[48,100,0,0], hsb=[271,100,100], hsl=[271,100,50], lab=[41,83,-92]),
+    Color(name="Pumpkin", hex="ff7300", rgb=[255,115,0], cmyk=[0,55,100,0], hsb=[27,100,100], hsl=[27,100,50], lab=[65,49,73]),
+    Color(name="Chartreuse", hex="90fe00", rgb=[144,254,0], cmyk=[43,0,100,0], hsb=[86,100,100], hsl=[86,100,50], lab=[90,-63,86]),
+    Color(name="Violet", hex="8400ff", rgb=[132,0,255], cmyk=[48,100,0,0], hsb=[271,100,100], hsl=[271,100,50], lab=[41,83,-92]),
     Color(name="Red", hex="ff0a12", rgb=[255,10,18], cmyk=[0,96,93,0], hsb=[358,96,100], hsl=[358,100,52], lab=[54,80,63]),
     Color(name="Yellow", hex="fffb00", rgb=[255,251,0], cmyk=[0,2,100,0], hsb=[59,100,100], hsl=[59,100,50], lab=[96,-20,94]),
     Color(name="Cyan", hex="00fff7", rgb=[0,255,247], cmyk=[100,0,3,0], hsb=[178,100,100], hsl=[178,100,50], lab=[91,-50,-10]),
-    # Color(name="Rose", hex="ff00a1", rgb=[255,0,161], cmyk=[0,100,37,0], hsb=[322,100,100], hsl=[322,100,50], lab=[56,87,-14]),
+    Color(name="Rose", hex="ff00a1", rgb=[255,0,161], cmyk=[0,100,37,0], hsb=[322,100,100], hsl=[322,100,50], lab=[56,87,-14]),
 ]
 
 def encode_image(image_bytes):
     return base64.b64encode(image_bytes).decode('utf-8')
 
-def ask_gippity_for_primary_clusters(image_bytes: bytes, metadata: str):
+def ask_vllm_for_primary_clusters(image_bytes: Union[bytes, list[bytes]], metadata: str, vllm="claude3", version="v3"):
     """
-    Returns a list of tuples of (box_label (str), is_primary (bool)), from asking GPT-4 to select the primary clusters in the image.
-    Or None if GPT-4 could not find any clusters.
+    Returns a list of tuples of (box_label (str), is_primary (bool)), from asking the VLLM to select the primary clusters in the image.
+    Or None if the VLLM could not find any clusters.
     """
-    encoded_image = encode_image(image_bytes)
+    if type(image_bytes) == list:
+        encoded_images = [encode_image(image) for image in image_bytes]
+    else:
+        encoded_images = [encode_image(image_bytes)]
 
-    response_json = submit_image_to_gpt4(encoded_image, metadata)
+    response_json = submit_image_to_vllm(encoded_images, metadata, vllm=vllm)
 
     return response_json
 
-def save_gpt4_response(artifact_id, response_json):
-    output_dir = os.path.join(os.path.dirname(__file__), ".track", "vacocam", "gpt4")
+def save_vllm_response(artifact_id, response_json, vllm):
+    output_dir = os.path.join(os.path.dirname(__file__), ".track", "vacocam", vllm)
 
-    gpt4_response_path = os.path.join(output_dir, f"{artifact_id}.json")
+    response_path = os.path.join(output_dir, f"{artifact_id}.json")
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    with open(gpt4_response_path, 'w') as f:
+    with open(response_path, 'w') as f:
         json.dump(response_json, f)
 
-    return gpt4_response_path
+    return response_path
 
-def load_gpt4_response(artifact_id):
-    output_dir = os.path.join(os.path.dirname(__file__), ".track", "vacocam", "gpt4")
+def load_vllm_response(artifact_id, vllm):
+    output_dir = os.path.join(os.path.dirname(__file__), ".track", "vacocam", vllm)
 
-    gpt4_response_path = os.path.join(output_dir, f"{artifact_id}.json")
+    response_path = os.path.join(output_dir, f"{artifact_id}.json")
 
-    if os.path.exists(gpt4_response_path):
-        with open(gpt4_response_path, 'r') as f:
+    if os.path.exists(response_path):
+        with open(response_path, 'r') as f:
             response_json = json.load(f)
 
         return response_json
     else:
         return None
+
+def parse_vllm_response(response_json, vllm):
+    if vllm == "claude3":
+        return parse_claude3_response(response_json)
+    elif vllm == "gpt4":
+        return parse_gpt4_response(response_json)
+    elif vllm == "gemini1.5":
+        return parse_gemini_response(response_json)
+    else:
+        raise Exception("VLLM not implemented")
 
 def parse_gpt4_response(response_json):
     try:
@@ -968,29 +1021,116 @@ def parse_gpt4_response(response_json):
 
         return None
 
+def parse_claude3_response(response_json):
+    try:
+        response_content = response_json["content"][0]["text"]
+
+        start = response_content.find("[")
+        end = response_content.find("]")
+
+        if start == -1 or end == -1:
+            return None
+        else:
+            json_content = response_content[start:end+1]
+
+            response_dict = json.loads(json_content)
+
+            result = {item["id"]: item["primary"] for item in response_dict}
+
+            print("Parsed Claude-3 response")
+            print(str(result))
+
+            return result
+    except Exception as e:
+        print(f"\n==== Error parsing Claude-3 response. ==== \n")
+        print("Response Error:")
+        print(e)
+        print("--------------------------------")
+        print("Response JSON:")
+        print(response_json)
+        print("==== End of Claude-3 response. ====")
+        print("\n")
+
+        return None
+
+def parse_gemini_response(response_json):
+    try:
+        response_content = response_json
+
+        if type(response_content) != list:
+            return None
+        else:
+            result = {item["id"]: item["primary"] for item in response_content}
+
+            print("Parsed Gemini-1.5 response")
+            print(str(result))
+
+            return result
+    except Exception as e:
+        print(f"\n==== Error parsing Gemini response. ==== \n")
+        print(e)
+        print("--------------------------------")
+        print(response_json)
+        print("==== End of Gemini response. ====")
+        print("\n")
+
+        return None
+
 def load_section_presentation(artifact_id):
     output_dir = os.path.join(os.path.dirname(__file__), ".track", "vacocam", "presentation")
 
     presentation_path = os.path.join(output_dir, artifact_id)
 
-    return load_presentation(presentation_path)
+    presentation_metadata_path = f"{presentation_path}.txt"
+
+    presentation_image_paths = [os.path.join(output_dir, f) for f
+                                 in os.listdir(output_dir)
+                                   if f.startswith(artifact_id) and f.endswith(".png")]
+
+    if len(presentation_image_paths) > 1 and os.path.exists(presentation_metadata_path):
+        image_bytes = [open(presentation_image_path, 'rb').read() for presentation_image_path in presentation_image_paths]
+        metadata = open(presentation_metadata_path, 'r').read()
+
+        return image_bytes, metadata
+    elif len(presentation_image_paths) == 1 and os.path.exists(presentation_metadata_path):
+        image_bytes = open(presentation_image_paths[0], 'rb').read()
+        metadata = open(presentation_metadata_path, 'r').read()
+
+        return image_bytes, metadata
+    else:
+        print(f"Could not find presentation at {presentation_path}")
+        return None, None
 
 def save_section_presentation(artifact_id, image_bytes, metadata: str):
     output_dir = os.path.join(os.path.dirname(__file__), ".track", "vacocam", "presentation")
 
     presentation_path = os.path.join(output_dir, artifact_id)
+    presentations_dir = os.path.dirname(presentation_path)
 
-    presentation_image_path, presentation_metadata_path = save_presentation(presentation_path, image_bytes, metadata)
+    if not os.path.exists(presentations_dir):
+        os.makedirs(presentations_dir)
 
-    if "CLUSTER_PREVIEW" in os.environ:
-        print("\n")
-        print(f"DBSCAN Clustering - {len(metadata)} Clusters")
-        print(f"Saved to {presentation_image_path} and {presentation_metadata_path}")
-        print("\n")
-        print(metadata)
-        print("\n")
+    presentation_metadata_path = f"{presentation_path}.txt"
+    with open(presentation_metadata_path, 'w') as f:
+        f.write(metadata)
+
+    if isinstance(image_bytes, list):
+        presentation_image_paths = []
+        for idx, image in enumerate(image_bytes):
+            presentation_image_path = f"{presentation_path}_{idx}.png"
+
+            pil_image = Image.open(io.BytesIO(image))
+            pil_image.save(presentation_image_path)
+
+            presentation_image_paths.append(presentation_image_path)
+        return presentation_image_paths, presentation_metadata_path
+    else:
+        presentation_image_path = f"{presentation_path}.png"
     
-    return presentation_image_path, presentation_metadata_path
+        pil_image = Image.open(io.BytesIO(image_bytes))
+        pil_image.save(presentation_image_path)
+
+        return presentation_image_path, presentation_metadata_path
 
 def get_artifact_id(video_path, start_frame, end_frame, framerate, cluster_labels):
     video_name = os.path.basename(video_path)
@@ -1009,37 +1149,6 @@ def get_artifact_id(video_path, start_frame, end_frame, framerate, cluster_label
     presentation_file_stem = "_".join([video_name, start_formatted, end_formatted] + cluster_labels)
 
     return presentation_file_stem
-
-def load_presentation(presentation_path):
-    presentation_image_path = f"{presentation_path}.png"
-    presentation_metadata_path = f"{presentation_path}.txt"
-
-    if os.path.exists(presentation_image_path) and os.path.exists(presentation_metadata_path):
-        image_bytes = open(presentation_image_path, 'rb').read()
-        metadata = open(presentation_metadata_path, 'r').read()
-        
-        return image_bytes, metadata
-    else:
-        print(f"Could not find presentation at {presentation_path}")
-        return None, None
-
-def save_presentation(presentation_path, image_bytes, metadata):
-    presentations_dir = os.path.dirname(presentation_path)
-
-    presentation_image_path = f"{presentation_path}.png"
-    presentation_metadata_path = f"{presentation_path}.txt"
-
-    if not os.path.exists(presentations_dir):
-        os.makedirs(presentations_dir)
-    
-    pil_image = Image.open(io.BytesIO(image_bytes))
-    pil_image.save(presentation_image_path)
-
-    with open(presentation_metadata_path, 'w') as f:
-        f.write(metadata)
-
-    return presentation_image_path, presentation_metadata_path
-
 
 def find_place_for_box(cluster: list[Detections], box_height, box_width, image_height, image_width):
     cluster_data_list: list[tuple[int, int, int, int, float, float]] = [(xyxy[0], xyxy[1], xyxy[2], xyxy[3], (xyxy[0] + xyxy[2]) / 2, (xyxy[1] + xyxy[3]) / 2) for frame_detections in cluster for xyxy, *_ in frame_detections]
@@ -1088,71 +1197,133 @@ def find_place_for_box(cluster: list[Detections], box_height, box_width, image_h
     # if no box position was found, return the centroid
     return (int(centroid_x), int(centroid_y))
 
-metadata_type = List[Tuple[str, float, float, float, int, int, int, Color]]
-
 import hashlib
 
-def present_section(bg_image, clustered_detections: dict[int, list[Detections]], ignore_noise=True):
-    metadata: metadata_type = []
+from dataclasses import dataclass
 
-    if bg_image is None:
-        bg_image = np.zeros((1080, 1920, 3), dtype=np.uint8)
-    else:
-        bg_image = cv2.cvtColor(bg_image, cv2.COLOR_RGB2BGR)
+@dataclass
+class ClusterMetadata:
+    box_label: str
+    centroid_x: float
+    centroid_y: float
+    median_size: float
+    cluster_size: int
+    start: int
+    end: int
+    start_ms: int
+    end_ms: int
+    color: Color
 
-        # reduce the whole bg image saturation
-        bg_image_hsv = cv2.cvtColor(bg_image, cv2.COLOR_BGR2HSV)
-        bg_image_hsv[:, :, 1] = bg_image_hsv[:, :, 1] * 0.6
-        bg_image = cv2.cvtColor(bg_image_hsv, cv2.COLOR_HSV2BGR)
+def present_section(bg_image: Union[np.ndarray, list[np.ndarray]], clustered_detections: dict[int, list[Detections]], ignore_noise=True, index=None, colors: Union[list[Color], None] = None):
+    section_length = len(next(iter(clustered_detections.values())))
+
+    def calculate_section_metadata(clustered_detections: dict[int, list[Detections]], colors: list[Color]):
+        section_metadata: dict[int, ClusterMetadata] = {}
+        section_data: dict[int, np.ndarray] = {}
+
+        for idx, (label, cluster) in enumerate(clustered_detections.items()):
+            if ignore_noise and label == -1:
+                continue
+
+            cluster_data = [((xyxy[0] + xyxy[2]) / 2, (xyxy[1] + xyxy[3]) / 2, (xyxy[2] - xyxy[0]) * (xyxy[3] - xyxy[1])) for frame_detections in cluster for xyxy, *_ in frame_detections]
+            cluster_data = np.array(cluster_data)
+
+            if len(cluster_data) == 0:
+                continue
+
+            box_label = chr(label + 65)
+            cluster_mean = np.mean(cluster_data, axis=0)
+            centroid_x = cluster_mean[0]
+            centroid_y = cluster_mean[1]
+            median_size = cluster_mean[2]
+            cluster_size = len(cluster_data)
+
+            color = colors[idx % len(colors)]
+
+            cluster_start_frame = 0
+            cluster_end_frame = len(cluster) - 1
+
+            # find the first non-empty frame
+            for idx, frame_detections in enumerate(cluster):
+                if len(frame_detections) > 0:
+                    cluster_start_frame = idx
+                    break
+            for idx, frame_detections in enumerate(reversed(cluster)):
+                if len(frame_detections) > 0:
+                    cluster_end_frame = len(cluster) - idx - 1
+                    break
+
+            start_ms = cluster_start_frame * 1000 // 30
+            end_ms = cluster_end_frame * 1000 // 30
+
+            metadata = ClusterMetadata(box_label=box_label, centroid_x=centroid_x, centroid_y=centroid_y, median_size=median_size, cluster_size=cluster_size, start=cluster_start_frame, end=cluster_end_frame, start_ms=start_ms, end_ms=end_ms, color=color)
+            section_metadata[label] = metadata
+            section_data[label] = cluster_data
+
+        return section_metadata, section_data
+
+    def calculate_shuffled_colors(bg_image: np.ndarray):
+        image_as_bytes = bg_image.tobytes()
+        cluster_keys = list(clustered_detections.keys())
+        cluster_keys = [key % 256 for key in cluster_keys]
+        keys_as_bytes = bytes(cluster_keys)
+
+        hash_object = hashlib.sha256(image_as_bytes + keys_as_bytes)
+        hash_hex = hash_object.hexdigest()
+        seed_value = int(hash_hex, 16) % (2 ** 32)
+        random.seed(seed_value)
+
+        colors_shuffled = copy.deepcopy(COLORS)
+        random.shuffle(colors_shuffled)
+
+        return colors_shuffled
+
+    if isinstance(bg_image, list):
+        shuffled_colors = calculate_shuffled_colors(bg_image[0])
+        section_metadata, _ = calculate_section_metadata(clustered_detections, shuffled_colors)
+
+        images: list[bytes] = []
+
+        split_clustered_detections_list: list[dict[int, list[Detections]]] = []
+        split_k = len(bg_image)
+        split_indices = [(idx * section_length // split_k, (idx + 1) * section_length // split_k) for idx in range(split_k)]
+
+        print(f"[tracking] Splitting the section into {split_k} parts")
+        print(f"[tracking] Split indices: {split_indices}")
+        print(f"[tracking] Section length: {section_length}")
+
+        for start, end in split_indices:
+            split_clustered_detections = {label: cluster[start:end] for label, cluster in clustered_detections.items()}
+            split_clustered_detections_list.append(split_clustered_detections)
+
+        for idx, image in enumerate(bg_image):
+            presented_image, _ = present_section(image, split_clustered_detections_list[idx], index=idx, ignore_noise=ignore_noise, colors=shuffled_colors)
+
+            if isinstance(presented_image, list):
+                raise ValueError(f"Expected a single image, got a list of images at index {idx}")
+            
+            images.append(presented_image)
+        
+        return images, present_metadata(section_metadata)
     
-    image_as_bytes = bg_image.tobytes()
-    cluster_keys = list(clustered_detections.keys())
-    cluster_keys = [key % 256 for key in cluster_keys]
-    keys_as_bytes = bytes(cluster_keys)
+    if colors is None:
+        colors = calculate_shuffled_colors(bg_image)
 
-    hash_object = hashlib.sha256(image_as_bytes + keys_as_bytes)
-    hash_hex = hash_object.hexdigest()
-    seed_value = int(hash_hex, 16) % (2 ** 32)
-    random.seed(seed_value)
+    section_metadata, section_data = calculate_section_metadata(clustered_detections, colors=colors)
 
-    colors_shuffled = copy.deepcopy(colors)
-    random.shuffle(colors_shuffled)
+    bg_image = cv2.cvtColor(bg_image, cv2.COLOR_RGB2BGR)
 
-    for idx, (label, cluster) in enumerate(clustered_detections.items()):
-        if ignore_noise and label == -1:
-            continue
+    # reduce the whole bg image saturation
+    bg_image_hsv = cv2.cvtColor(bg_image, cv2.COLOR_BGR2HSV)
+    bg_image_hsv[:, :, 1] = bg_image_hsv[:, :, 1] * 0.6
+    bg_image = cv2.cvtColor(bg_image_hsv, cv2.COLOR_HSV2BGR)
 
-        cluster_data = [((xyxy[0] + xyxy[2]) / 2, (xyxy[1] + xyxy[3]) / 2, (xyxy[2] - xyxy[0]) * (xyxy[3] - xyxy[1])) for frame_detections in cluster for xyxy, *_ in frame_detections]
-        cluster_data = np.array(cluster_data)
+    # Plotting the clusters
+    for idx, (label, cluster_metadata) in enumerate(section_metadata.items()):
+        cluster = clustered_detections[label]
+        cluster_data = section_data[label]
 
-        box_label = chr(label + 65)
-        cluster_mean = np.mean(cluster_data, axis=0)
-        centroid_x = cluster_mean[0]
-        centroid_y = cluster_mean[1]
-        median_size = cluster_mean[2]
-        cluster_size = len(cluster_data)
-
-        color = colors_shuffled[idx % len(colors_shuffled)]
-
-        cluster_start_frame = 0
-        cluster_end_frame = len(cluster) - 1
-
-        # find the first non-empty frame
-        for idx, frame_detections in enumerate(cluster):
-            if len(frame_detections) > 0:
-                cluster_start_frame = idx
-                break
-        for idx, frame_detections in enumerate(reversed(cluster)):
-            if len(frame_detections) > 0:
-                cluster_end_frame = len(cluster) - idx - 1
-                break
-
-        start_ms = cluster_start_frame * 1000 // 30
-        end_ms = cluster_end_frame * 1000 // 30
-
-        metadata.append((box_label, centroid_x, centroid_y, median_size, cluster_size, start_ms, end_ms, color))
-
-        # ========== Plotting the cluster ============
+        # ========== Plotting the detections ============
         for x, y, area in cluster_data:
             # add circle, radius is proportional to the area of the bounding box
             # cv2.circle(bg_image, (int(x), int(y)), int(np.sqrt(area) / 2), color["rgb"][::-1], -1)
@@ -1162,12 +1333,12 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
             tlx, tly = int(x - radius - padding), int(y - radius - padding)
             brx, bry = int(x + radius + padding), int(y + radius + padding)
 
-            cv2.rectangle(bg_image, (tlx, tly), (brx, bry), color.rgb[::-1], 2)
+            cv2.rectangle(bg_image, (tlx, tly), (brx, bry), cluster_metadata.color.rgb[::-1], 2)
 
         frame_centers = []
 
         # find the center of the every frame
-        for idx in range(cluster_start_frame, cluster_end_frame + 1):
+        for idx in range(cluster_metadata.start, cluster_metadata.end + 1):
             frame_detections = cluster[idx]
 
             if len(frame_detections) > 0:
@@ -1210,7 +1381,7 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
         # ========== Plotting the label box ============
         image_height, image_width, _ = bg_image.shape
 
-        text_content = f"{box_label}"
+        text_content = f"{cluster_metadata.box_label}"
         text_font = cv2.FONT_HERSHEY_DUPLEX
         text_font_scale = 0.8
         text_font_thickness = 1
@@ -1222,7 +1393,7 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
         box_size = (text_size[0] + box_padding * 2, text_size[1] + box_padding * 2)
         
         box_color = (0,0,0)
-        text_color = color.rgb[::-1]
+        text_color = cluster_metadata.color.rgb[::-1]
 
         box_tlx, box_tly = find_place_for_box(cluster, box_size[1], box_size[0], image_height, image_width)
         box_brx, box_bry = box_tlx + box_size[0], box_tly + box_size[1]
@@ -1253,6 +1424,9 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
 
         text_origin = (box_tlx + box_padding, box_bry - box_padding)
         cv2.putText(bg_image, text_content, text_origin, text_font, text_font_scale, text_color, text_font_thickness, cv2.LINE_AA)
+
+        # ========== Plotting the arrow ============
+        # continue
 
         arrow_length = 50
         arrow_tail_width = 4
@@ -1304,17 +1478,32 @@ def present_section(bg_image, clustered_detections: dict[int, list[Detections]],
         arrow_head_point = (int(arrow_head_point[0] - arrow_tail_width * np.cos(average_angle)), int(arrow_head_point[1] - arrow_tail_width * np.sin(average_angle)))
         cv2.line(bg_image, arrow_head_point, arrow_tail_point, text_color, arrow_tail_width, cv2.LINE_AA)
 
+    if index is not None:
+        text = f"Image {index + 1}"
+        text_font = cv2.FONT_HERSHEY_DUPLEX
+        text_font_scale = 0.8
+        text_font_thickness = 1
+
+        text_size, _ = cv2.getTextSize(text, text_font, text_font_scale, text_font_thickness)
+        text_origin = (10, 10 + text_size[1] + 10)
+
+        box_size = (text_size[0] + 20, text_size[1] + 20)
+
+        cv2.rectangle(bg_image, (0, 0), (box_size[0], box_size[1]), (0, 0, 0), -1)
+        cv2.putText(bg_image, text, text_origin, text_font, text_font_scale, (255, 255, 255), text_font_thickness, cv2.LINE_AA)
+
     image_bytes = cv2.imencode('.png', bg_image)[1].tobytes()
-    presented_metadata = present_metadata(metadata)
+    presented_metadata = present_metadata(section_metadata)
 
     return image_bytes, presented_metadata
 
-def present_metadata(metadata: metadata_type):
+def present_metadata(section_metadata: dict[int, ClusterMetadata]):
     presented_metadata = []
+
     headers = "id, color"
 
-    for box_label, _, _, _, _, _, _, color in metadata:
-        presented_metadata.append(f"{box_label}, {color.name}")
+    for m in section_metadata.values():
+        presented_metadata.append(f"{m.box_label}, {m.color.name}")
 
     presented_metadata = "\n".join(presented_metadata)
     presented_metadata = f"{headers}\n{presented_metadata}"
@@ -1324,6 +1513,7 @@ def present_metadata(metadata: metadata_type):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--tracking', default="declustered")
+    parser.add_argument('--vllm', default="claude3")
     parser.add_argument('remainder', nargs=argparse.REMAINDER, help='All other arguments')
     args = parser.parse_args()
 
@@ -1345,11 +1535,11 @@ if __name__ == "__main__":
             else:
                 _, loaded_detections = load_video_detections(video_path, module="detect")
 
-            track_video(video_path, loaded_detections, tracking=args.tracking)
+            track_video(video_path, loaded_detections, tracking=args.tracking, vllm=args.vllm)
     else:
         if args.tracking == "vacocam":
             _, loaded_detections = load_video_detections(video_path_list[0], module="track", version="declustered")
         else:
             _, loaded_detections = load_video_detections(video_path_list[0], module="detect")
 
-        track_video(video_path_list[0], loaded_detections, tracking=args.tracking)
+        track_video(video_path_list[0], loaded_detections, tracking=args.tracking, vllm=args.vllm)
